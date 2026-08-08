@@ -1,0 +1,50 @@
+# Registry of every tool the Ronin MCP tool server exposes.
+#
+# category: recon | web_exploit | network_exploit | fileops
+# timeout_seconds bounds a single tool call server-side (executor.py enforces it).
+# This file is the single source of truth for both: server-side per-tool
+# timeouts, and client-side category-based tool allowlisting.
+
+tools:
+  http_request:
+    category: recon
+    description: Send an HTTP request to a target URL within scope.
+    timeout_seconds: 15
+
+  dns_lookup:
+    category: recon
+    description: Resolve A/AAAA/CNAME/TXT DNS records for a hostname within scope.
+    timeout_seconds: 15
+
+  code_search:
+    category: fileops
+    description: Search source code for a regex pattern using ripgrep, scoped to the allowed directory.
+    timeout_seconds: 15
+
+  file_read:
+    category: fileops
+    description: Read a file's contents, read-only, scoped to the allowed directory.
+    timeout_seconds: 15
+
+  probe_variant:
+    category: web_exploit
+    description: >
+      Send a baseline request and a modified variant of the same request, then
+      diff the two responses. Use this to test auth-bypass and IDOR patterns —
+      e.g. request an endpoint with a valid session, then again with a
+      different user's ID or a stripped Authorization header, and compare.
+    timeout_seconds: 20
+
+  execute_python:
+    category: exploit_runtime
+    description: >
+      Run Python code in an isolated, resource-capped Docker sandbox. Use
+      only when a finding needs custom logic the pre-built web_exploit tools
+      don't cover. For network calls, use the injected ronin_target.request()
+      helper instead of raw requests/socket/urllib -- it enforces the same
+      target scope every other tool enforces. Network scope here is a soft
+      guarantee (helper + prompt convention), not a hard technical one --
+      see categories/exploit_runtime.py for the full sandboxing writeup.
+    timeout_seconds: 25
+
+# network_exploit: reserved for a future part. No tools registered yet.

@@ -1,0 +1,5 @@
+anthropic
+requests
+dnspython
+mcp
+pyyaml
