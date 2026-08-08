@@ -5,7 +5,22 @@ tools and lets it reason step-by-step over a target to find vulnerabilities.
 Every tool call and finding is logged to a JSON transcript.
 
 This is deliberately a **thin harness**, not a framework: one tool-calling
-loop, four tools, no database, no message queue, no orchestration DAG.
+loop, a handful of tools, no database, no message queue, no orchestration DAG.
+
+Tools live behind a standalone **MCP tool server** (`ronin-tools-mcp/`,
+stdio transport) rather than being imported directly. Two ways to run it:
+
+- **Single-agent** (`main.py` → `loop.py`) — the original mode: one agent,
+  every tool available.
+- **Two-agent** (`run.py`) — a recon agent explores and hands off structured
+  candidate findings to a separate exploit agent that validates them one at
+  a time, each restricted to a different slice of the tool server by a
+  client-side allowlist. See [Two-agent mode](#two-agent-mode-recon--exploit)
+  below.
+
+Both share the same `agent_core.py` loop mechanics and the same MCP server —
+there's one implementation of "call Claude, run a tool, log it, repeat,"
+not one per agent.
 
 > ## ⚠️ Authorized testing only
 >
@@ -22,8 +37,10 @@ loop, four tools, no database, no message queue, no orchestration DAG.
 ## What it does
 
 1. You give it a `--target` and an `--objective`.
-2. Claude gets 4 tools (`http_request`, `dns_lookup`, `code_search`,
-   `file_read`) and reasons step by step, calling tools to investigate.
+2. `main.py` spawns the `ronin-tools-mcp` server as a subprocess and connects
+   to it over stdio. Claude gets the tools it exposes (`http_request`,
+   `dns_lookup`, `code_search`, `file_read`, `probe_variant`) and reasons
+   step by step, calling tools to investigate.
 3. Whenever Claude identifies a vulnerability, it emits a structured
    finding (title, severity, evidence, reproduction steps).
 4. The loop stops when Claude decides it's done, or when the iteration cap
@@ -38,8 +55,12 @@ loop, four tools, no database, no message queue, no orchestration DAG.
 pip install -r requirements.txt
 ```
 
-You also need [ripgrep](https://github.com/BurntSushi/ripgrep#installation)
-(`rg`) installed and on your `PATH` — it's used by the `code_search` tool.
+You also need:
+- [ripgrep](https://github.com/BurntSushi/ripgrep#installation) (`rg`) on
+  your `PATH` — used by `code_search`.
+- Docker, running — used by `execute_python` (two-agent mode only; the
+  single-agent mode doesn't need it). The sandbox image builds itself on
+  first use.
 
 Set your Anthropic API key:
 
@@ -70,24 +91,97 @@ python main.py \
 | `--model` | no | `claude-sonnet-4-6` | Claude model ID |
 | `--output-dir` | no | `.` | Where to write the transcript JSON file |
 
+## Two-agent mode (recon → exploit)
+
+```bash
+python run.py \
+  --target http://localhost:3000 \
+  --objective "Find authentication, IDOR, and injection vulnerabilities" \
+  --scope-dir . \
+  --findings-path findings.json
+```
+
+`recon_agent` (tools: `recon` + `fileops` only) explores and writes candidate
+findings to `findings.json`:
+
+```jsonc
+{
+  "findings": [
+    {
+      "id": "f1", "type": "sql_injection", "target": "/rest/products/search",
+      "evidence": "...", "status": "new", "discovered_by": "recon-agent",
+      "exploit_attempts": []
+    }
+  ]
+}
+```
+
+`exploit_agent` (tools: `web_exploit` + `exploit_runtime` only) then reads
+that file and processes each `status == "new"` entry one at a time —
+`new → claimed → exploited | dead-end` — each with its own fresh, focused
+conversation (own iteration/time budget) and its own entry appended to
+`exploit_attempts` (full transcript + verdict). It prefers the pre-built
+`probe_variant` tool when a finding fits that pattern, and falls back to
+`execute_python` — a sandboxed Python runtime — when it needs custom logic
+(a specific payload, a multi-request chain, extracting and reusing a token).
+
+Every `execute_python` call — the code submitted *and* its stdout/stderr —
+is logged to the transcript verbatim, same as any other tool call; that's
+the audit trail for what actually ran against the target.
+
+### `execute_python` sandboxing
+
+Each call runs in a fresh, disposable Docker container (`python:3.11-slim` +
+`requests`, image builds itself on first use):
+
+- **Filesystem**: root FS is read-only; the only writable path is a fresh
+  per-call scratch directory bind-mounted in — nothing else on the host is
+  reachable from inside the container, full stop.
+- **Resources**: capped at 256MB memory, 0.5 CPU, 64 pids. A hung container
+  gets an explicit `docker kill`, not just an abandoned `docker run`.
+- **Network**: the container can reach the target (needed to actually test
+  it) — this is the one place scope enforcement is a *soft* guarantee, not a
+  hard one. An injected `ronin_target.py` helper re-checks the target host
+  against the same allowlist every other tool enforces, and the tool
+  description + exploit_agent's prompt both push the model to use
+  `ronin_target.request(...)` instead of raw `requests`/`socket`/`urllib` —
+  but code that deliberately bypasses the helper isn't technically blocked.
+  This tradeoff was deliberate (see `ronin-tools-mcp/categories/exploit_runtime.py`
+  for the full writeup) — closing it for real would mean a Docker network
+  with an egress allowlist, which is more infrastructure than this harness
+  takes on for now.
+
 ## Tools available to the agent
 
-All tools run in-process except `code_search`, which subprocesses `ripgrep`
-directly (no shell). Every tool call has a hard 15-second timeout.
+Tools are implemented in [`ronin-tools-mcp/`](ronin-tools-mcp), organized by
+category (see [`manifest.yaml`](ronin-tools-mcp/manifest.yaml) for the
+registry: name, category, description, timeout). Every tool call has a hard
+per-tool timeout (15–20s depending on the tool).
 
-- **`http_request(method, url, headers, body)`** — sends an HTTP request via
-  `requests`. Response body truncated to ~4000 chars.
-- **`dns_lookup(hostname)`** — resolves A/AAAA/CNAME/TXT records via
-  `dnspython`.
-- **`code_search(pattern, path)`** — greps source code with `rg --json`,
-  scoped to `--scope-dir`. Cannot read outside it.
-- **`file_read(path)`** — read-only file read, scoped to `--scope-dir`,
-  capped at ~4000 chars. Cannot read outside it, and cannot write.
+- **recon** (`categories/recon.py`) — `http_request(method, url, headers, body)`
+  and `dns_lookup(hostname)`, ported from the original in-process tools.
+- **fileops** (`categories/fileops.py`) — `code_search(pattern, path)` (`rg --json`,
+  no shell) and `file_read(path)`, scoped to `--scope-dir`.
+- **web_exploit** (`categories/web_exploit.py`) — `probe_variant(...)`: sends a
+  baseline request and a modified variant, diffs the two responses. For
+  testing auth-bypass / IDOR patterns.
+- **exploit_runtime** (`categories/exploit_runtime.py`) — `execute_python(code, timeout)`:
+  runs code in a sandboxed Docker container for exploits `probe_variant`
+  can't express. See [Two-agent mode](#two-agent-mode-recon--exploit) above
+  for the full sandboxing writeup.
+- **network_exploit** — reserved for a future part, no tools yet.
 
-`code_search` and `file_read` resolve every path with `os.path.realpath`
-and reject anything that resolves outside the scope directory (blocking
-`../` traversal, absolute-path escapes, and symlink escapes). See
-[`tests/test_sandbox.py`](tests/test_sandbox.py).
+**Scope enforcement** ([`ronin-tools-mcp/scope.py`](ronin-tools-mcp/scope.py))
+is centralized and applies to every tool, network tools included:
+`code_search`/`file_read` resolve every path with `os.path.realpath` and
+reject anything outside `--scope-dir` (`../` traversal, absolute-path
+escapes, symlink escapes); `http_request`/`dns_lookup`/`probe_variant`
+validate the target host against an allowed-hosts list (derived from
+`--target` by default) *before* touching the network — a disallowed host is
+rejected in code, not just discouraged by the system prompt. See
+[`tests/test_scope.py`](tests/test_scope.py) (unit tests) and
+[`tests/test_mcp_server.py`](tests/test_mcp_server.py) (end-to-end, through
+the real server).
 
 ## Output
 
@@ -143,8 +237,10 @@ Each run writes `transcript_<target>_<timestamp>.json` containing:
 
 ```bash
 pip install pytest
-pytest tests/test_sandbox.py -v      # path-traversal / sandbox-escape tests, no network or API key needed
-pytest tests/test_e2e.py -v -s       # full loop against a local test server (or Juice Shop at :3000 if running)
+pytest tests/test_scope.py -v          # unit tests on the Scope class, no subprocess/network/API key needed
+pytest tests/test_mcp_server.py -v     # spins up the real MCP server, exercises every tool through it
+pytest tests/test_execute_python.py -v -s  # real Docker sandbox checks (skips if Docker isn't available)
+pytest tests/test_e2e.py -v -s         # full single-agent loop against a local test server (or Juice Shop at :3000)
 ```
 
 `test_e2e.py` makes a real call to the Anthropic API and is skipped
@@ -156,6 +252,7 @@ particular vulnerability was found.
 
 ## What this is *not*
 
-By design, this harness does not include: retry/backoff logic, async
-execution, a web UI, a database, authentication, orchestration beyond the
-single tool-calling loop, or any tools beyond the four listed above.
+By design, this harness does not include: retry/backoff logic, a web UI, a
+database, authentication, a service mesh, or a message queue. `loop.py` is
+async only because the MCP client requires it, not as a step toward
+concurrent scanning.

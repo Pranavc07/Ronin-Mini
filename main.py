@@ -10,6 +10,7 @@ you own or have explicit written permission to test.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -71,13 +72,15 @@ def main() -> int:
     print(f"[+] Max iters:   {args.max_iterations}   Max minutes: {args.max_minutes}")
     print("[+] Starting agent loop...\n")
 
-    result = run_agent(
-        target=args.target,
-        objective=args.objective,
-        scope_dir=scope_dir,
-        model=args.model,
-        max_iterations=args.max_iterations,
-        max_minutes=args.max_minutes,
+    result = asyncio.run(
+        run_agent(
+            target=args.target,
+            objective=args.objective,
+            scope_dir=scope_dir,
+            model=args.model,
+            max_iterations=args.max_iterations,
+            max_minutes=args.max_minutes,
+        )
     )
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
