@@ -26,6 +26,8 @@ FINDING_END = "<<<END_FINDING>>>"
 
 _REPO_ROOT = os.path.dirname(os.path.realpath(__file__))
 _MCP_SERVER_PATH = os.path.join(_REPO_ROOT, "ronin-tools-mcp", "server.py")
+AGENTS_DIR = os.path.join(_REPO_ROOT, "agents")
+SKILLS_DIR = os.path.join(_REPO_ROOT, "skills")
 
 _TOOLS_DIR = os.path.join(_REPO_ROOT, "ronin-tools-mcp")
 if _TOOLS_DIR not in sys.path:
@@ -38,11 +40,61 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def mcp_server_params(scope_dir: str, allowed_hosts: list[str]) -> StdioServerParameters:
+def load_agent_prompt(name: str) -> str:
+    """Load a role prompt from agents/{name}.md. This is a format() template --
+    callers fill {target}, {tool_schemas}, etc. exactly as the old hardcoded
+    SYSTEM_PROMPT_TEMPLATE strings did. Kept as .format() so externalizing the
+    prompt is a pure move with no behavior change.
+    """
+    with open(os.path.join(AGENTS_DIR, f"{name}.md"), "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def load_skill(finding_type: str) -> str | None:
+    """Return the raw markdown of skills/{finding_type}.md, or None if no file
+    matches. The returned text is appended to an already-formatted prompt as a
+    literal string -- it is NOT run through str.format(), so skill files can
+    contain braces (payloads, JSON, SSTI like {{7*7}}) freely. Returning None
+    is the explicit "no skill matched, fall back to base reasoning" signal.
+    """
+    if not finding_type:
+        return None
+    path = os.path.join(SKILLS_DIR, f"{finding_type}.md")
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def mcp_server_params(
+    scope_dir: str, allowed_hosts: list[str], findings_path: str | None = None
+) -> StdioServerParameters:
     args = [_MCP_SERVER_PATH, "--scope-dir", scope_dir]
     for host in allowed_hosts:
         args += ["--allowed-host", host]
+    # Only the verify agent's replay_probe needs the findings file server-side;
+    # the other agents spawn the server without it and it's simply unused.
+    if findings_path is not None:
+        args += ["--findings-path", findings_path]
     return StdioServerParameters(command=sys.executable, args=args)
+
+
+_MANIFEST_CACHE: dict[str, ToolMeta] | None = None
+
+
+def _tool_read_timeout(name: str) -> float:
+    """Per-tool client-side read timeout, derived from the manifest's own
+    per-tool timeout (+ margin) so a legitimately slow tool (execute_python's
+    Docker spin-up, replay_probe re-running several calls) isn't killed by a
+    flat 15s cap. Falls back to TOOL_TIMEOUT_SECONDS for unknown tools.
+    """
+    global _MANIFEST_CACHE
+    if _MANIFEST_CACHE is None:
+        _MANIFEST_CACHE = load_manifest()
+    meta = _MANIFEST_CACHE.get(name)
+    if meta is None:
+        return TOOL_TIMEOUT_SECONDS
+    return max(TOOL_TIMEOUT_SECONDS, meta.timeout_seconds + 5)
 
 
 def mcp_tools_to_anthropic_schema(mcp_tools: list) -> list[dict]:
@@ -79,7 +131,7 @@ async def execute_tool(session: ClientSession, name: str, tool_input: dict) -> t
     exception.
     """
     try:
-        result = await session.call_tool(name, tool_input, read_timeout_seconds=TOOL_TIMEOUT_SECONDS)
+        result = await session.call_tool(name, tool_input, read_timeout_seconds=_tool_read_timeout(name))
     except Exception as e:  # noqa: BLE001 -- MCP transport/timeout errors, connection drops, etc.
         return {"error": f"MCP call to '{name}' failed: {type(e).__name__}: {e}"}, True
 

@@ -57,6 +57,7 @@ async def _run_full_flow(scope_dir: str):
                 "file_read",
                 "probe_variant",
                 "execute_python",
+                "replay_probe",
             }
 
             # --- fileops: within scope ---

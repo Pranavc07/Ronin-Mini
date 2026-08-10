@@ -22,10 +22,10 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 import executor  # noqa: E402
 from manifest import load_manifest  # noqa: E402
 from scope import Scope  # noqa: E402
-from categories import exploit_runtime, fileops, network_exploit, recon, web_exploit  # noqa: E402
+from categories import exploit_runtime, fileops, network_exploit, recon, verify, web_exploit  # noqa: E402
 
 
-def build_server(scope_dir: str, allowed_hosts: list[str]) -> MCPServer:
+def build_server(scope_dir: str, allowed_hosts: list[str], findings_path: str | None = None) -> MCPServer:
     manifest = load_manifest()
     timeouts = {name: meta.timeout_seconds for name, meta in manifest.items()}
     scope = Scope(scope_dir=scope_dir, allowed_hosts=allowed_hosts)
@@ -35,6 +35,9 @@ def build_server(scope_dir: str, allowed_hosts: list[str]) -> MCPServer:
     fileops.register(mcp, scope, executor, timeouts)
     web_exploit.register(mcp, scope, executor, timeouts)
     exploit_runtime.register(mcp, scope, executor, timeouts)
+    # verify.register takes findings_path (its replay_probe reads the winning
+    # attempt from there); the uniform register() signature doesn't carry it.
+    verify.register(mcp, scope, executor, timeouts, findings_path)
     network_exploit.register(mcp, scope, executor, timeouts)
     return mcp
 
@@ -50,9 +53,14 @@ def main() -> None:
         required=True,
         help="Host allowed for network tools (repeatable for multiple hosts)",
     )
+    parser.add_argument(
+        "--findings-path",
+        default=None,
+        help="findings.json path -- only used by the verify agent's replay_probe tool",
+    )
     args = parser.parse_args()
 
-    mcp = build_server(args.scope_dir, args.allowed_host)
+    mcp = build_server(args.scope_dir, args.allowed_host, args.findings_path)
     mcp.run(transport="stdio")
 
 

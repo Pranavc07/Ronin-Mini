@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Top-level orchestrator for the two-agent recon -> exploit flow.
+"""Top-level orchestrator for the three-agent recon -> exploit -> verify flow.
 
-Runs recon_agent to completion, then exploit_agent, sequentially, against a
+Runs recon_agent, then exploit_agent, then verify_agent, sequentially, against a
 single target. This IS the entire orchestrator -- no scheduler, no queue.
 
 WARNING: For authorized security testing only. Only run this against targets
@@ -15,6 +15,7 @@ import sys
 
 from exploit_agent.loop import run_exploit_agent
 from recon_agent.loop import run_recon_agent
+from verify_agent.loop import run_verify_agent
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
@@ -34,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recon-max-minutes", type=float, default=20.0)
     parser.add_argument("--exploit-per-finding-max-iterations", type=int, default=10)
     parser.add_argument("--exploit-per-finding-max-minutes", type=float, default=5.0)
+    parser.add_argument("--verify-per-finding-max-iterations", type=int, default=6)
+    parser.add_argument("--verify-per-finding-max-minutes", type=float, default=5.0)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     return parser.parse_args()
 
@@ -78,7 +81,18 @@ async def main_async(args: argparse.Namespace) -> int:
         per_finding_max_minutes=args.exploit_per_finding_max_minutes,
     )
     print(f"[exploit] processed {exploit_result['processed']}/{exploit_result['total_findings']} findings")
-    print(f"[exploit] final results in {exploit_result['findings_path']}")
+
+    print(f"[verify] independently re-checking exploited findings from {args.findings_path}")
+    verify_result = await run_verify_agent(
+        target=args.target,
+        scope_dir=scope_dir,
+        findings_path=args.findings_path,
+        model=args.model,
+        per_finding_max_iterations=args.verify_per_finding_max_iterations,
+        per_finding_max_minutes=args.verify_per_finding_max_minutes,
+    )
+    print(f"[verify] verified {verify_result['processed']} exploited finding(s)")
+    print(f"[verify] final results in {verify_result['findings_path']}")
     return 0
 
 
