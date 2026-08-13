@@ -22,7 +22,7 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 import executor  # noqa: E402
 from manifest import load_manifest  # noqa: E402
 from scope import Scope  # noqa: E402
-from categories import exploit_runtime, fileops, network_exploit, recon, verify, web_exploit  # noqa: E402
+from categories import attack_reference, exploit_runtime, fileops, network_exploit, recon, verify, web_exploit  # noqa: E402
 
 
 def build_server(scope_dir: str, allowed_hosts: list[str], findings_path: str | None = None) -> MCPServer:
@@ -39,6 +39,7 @@ def build_server(scope_dir: str, allowed_hosts: list[str], findings_path: str | 
     # attempt from there); the uniform register() signature doesn't carry it.
     verify.register(mcp, scope, executor, timeouts, findings_path)
     network_exploit.register(mcp, scope, executor, timeouts)
+    attack_reference.register(mcp, scope, executor, timeouts)
     return mcp
 
 

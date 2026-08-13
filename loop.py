@@ -8,11 +8,11 @@ import json
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-import anthropic
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
 import agent_core
+import models
 
 SYSTEM_PROMPT_TEMPLATE = """You are an authorized penetration testing assistant. You have \
 been explicitly engaged to test the target below for security vulnerabilities. All testing \
@@ -66,6 +66,8 @@ async def run_agent(
     objective: str,
     scope_dir: str,
     model: str,
+    provider: str = "anthropic",
+    hitl_mode: str = "auto",
     max_iterations: int = 40,
     max_minutes: float = 20.0,
     max_tokens: int = 4096,
@@ -74,7 +76,7 @@ async def run_agent(
     if allowed_hosts is None:
         allowed_hosts = [urlparse(target).hostname or target]
 
-    client = anthropic.AsyncAnthropic()
+    model_adapter = models.build_adapter(provider, model)
     server_params = agent_core.mcp_server_params(scope_dir, allowed_hosts)
     started_at = _now_iso()
 
@@ -82,15 +84,16 @@ async def run_agent(
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools_result = await session.list_tools()
+            manifest = agent_core.load_manifest()
             tool_defs = agent_core.mcp_tools_to_anthropic_schema(tools_result.tools)
 
             system_prompt = build_system_prompt(target, objective, scope_dir, tool_defs)
             initial_message = f"Begin the authorized security assessment of {target}. Objective: {objective}"
 
             result = await agent_core.run_tool_loop(
-                client,
+                model_adapter,
                 session,
-                model,
+                manifest,
                 system_prompt,
                 tool_defs,
                 initial_message,
@@ -98,6 +101,7 @@ async def run_agent(
                 max_minutes,
                 max_tokens,
                 extract_markers=(agent_core.FINDING_START, agent_core.FINDING_END),
+                hitl_mode=hitl_mode,
             )
 
     ended_at = _now_iso()

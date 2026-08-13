@@ -14,10 +14,14 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client  # noqa: F401  (re-exported for callers)
+
+from models import ModelAdapter, ToolResult, Turn  # noqa: E402
 
 TOOL_TIMEOUT_SECONDS = 15
 
@@ -50,12 +54,28 @@ def load_agent_prompt(name: str) -> str:
         return f.read()
 
 
-def load_skill(finding_type: str) -> str | None:
-    """Return the raw markdown of skills/{finding_type}.md, or None if no file
-    matches. The returned text is appended to an already-formatted prompt as a
-    literal string -- it is NOT run through str.format(), so skill files can
-    contain braces (payloads, JSON, SSTI like {{7*7}}) freely. Returning None
-    is the explicit "no skill matched, fall back to base reasoning" signal.
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n?", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class SkillDoc:
+    """A parsed skills/{type}.md file: YAML frontmatter metadata (status,
+    cwe, attack_technique, attack_tactic) plus the markdown body. `body` is
+    still meant to be appended to an already-formatted prompt as a literal
+    string -- it is NOT run through str.format(), so skill files can contain
+    braces (payloads, JSON, SSTI like {{7*7}}) freely.
+    """
+
+    metadata: dict = field(default_factory=dict)
+    body: str = ""
+
+
+def load_skill(finding_type: str) -> SkillDoc | None:
+    """Return the parsed skills/{finding_type}.md, or None if no file
+    matches. Returning None is the explicit "no skill matched, fall back to
+    base reasoning" signal -- distinct from a matched file whose
+    metadata["status"] is "stub" (a file exists but has no real hand-authored
+    methodology yet).
     """
     if not finding_type:
         return None
@@ -63,7 +83,15 @@ def load_skill(finding_type: str) -> str | None:
     if not os.path.isfile(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
-        return f.read()
+        raw = f.read()
+
+    match = _FRONTMATTER_RE.match(raw)
+    if not match:
+        return SkillDoc(metadata={}, body=raw)
+
+    metadata = yaml.safe_load(match.group(1)) or {}
+    body = raw[match.end():]
+    return SkillDoc(metadata=metadata, body=body)
 
 
 def mcp_server_params(
@@ -150,6 +178,67 @@ async def execute_tool(session: ClientSession, name: str, tool_input: dict) -> t
     return output, is_error
 
 
+HITL_MODES = ("auto", "manual", "plan")
+
+
+def confirm_plan_for_run(gated_tool_names: set[str]) -> bool:
+    """The one-shot approval used by hitl_mode == "plan": asked once, before
+    the first gated tool call of a run_tool_loop invocation (one finding's
+    investigation for exploit_agent/verify_agent; the whole run for
+    recon_agent/the legacy single-agent loop, which have no per-finding
+    boundary). The answer governs every gated call for the rest of that run
+    -- no further prompts until the next run_tool_loop call starts fresh.
+    """
+    print(f"\n[HITL] This run may call gated tools: {', '.join(sorted(gated_tool_names))}")
+    try:
+        choice = input("Approve gated tool calls for this entire run? [y/n]: ").strip().lower()
+    except EOFError:
+        print("[HITL] No interactive stdin available; denying by default.")
+        return False
+    return choice in ("y", "yes")
+
+
+def confirm_tool_call(name: str, tool_input: dict, manifest: dict[str, ToolMeta]) -> tuple[bool, dict]:
+    """The HITL approval gate for hitl_mode == "manual": one prompt per
+    gated tool call. Auto-approves (no prompt) unless the tool's category
+    defaults to require_approval: true in manifest.yaml. Blocks on stdin --
+    this harness runs one turn at a time with no concurrent async work
+    competing for the event loop, so a blocking input() inside the async
+    loop is the simplest thing that satisfies "CLI-based, blocks on stdin,
+    no dashboard needed".
+
+    Returns (approved, final_input) -- final_input is tool_input unchanged
+    unless the operator chose to edit it.
+    """
+    meta = manifest.get(name)
+    if meta is None or not meta.require_approval:
+        return True, tool_input
+
+    print(f"\n[HITL] Tool call requires approval: {name}")
+    print(json.dumps(tool_input, indent=2))
+    try:
+        choice = input("Approve this tool call? [y/n/edit]: ").strip().lower()
+    except EOFError:
+        # Non-interactive stdin (e.g. a CI subprocess with no TTY) -- fail
+        # safe by denying rather than crashing the run.
+        print("[HITL] No interactive stdin available; denying by default.")
+        return False, tool_input
+
+    if choice in ("y", "yes"):
+        return True, tool_input
+    if choice in ("edit", "e"):
+        raw = input("Enter replacement JSON input (blank to deny): ").strip()
+        if not raw:
+            return False, tool_input
+        try:
+            edited = json.loads(raw)
+        except json.JSONDecodeError:
+            print("[HITL] Invalid JSON; denying this tool call.")
+            return False, tool_input
+        return True, edited
+    return False, tool_input
+
+
 def extract_blocks(text: str, start_marker: str, end_marker: str) -> list[dict]:
     """Pull every {start_marker}...JSON...{end_marker} block out of text and
     parse it. Skips anything that isn't valid JSON rather than raising --
@@ -170,9 +259,9 @@ def extract_blocks(text: str, start_marker: str, end_marker: str) -> list[dict]:
 
 
 async def run_tool_loop(
-    anthropic_client,
+    model_adapter: ModelAdapter,
     session: ClientSession,
-    model: str,
+    manifest: dict[str, ToolMeta],
     system_prompt: str,
     tool_defs: list[dict],
     initial_message: str,
@@ -180,21 +269,33 @@ async def run_tool_loop(
     max_minutes: float,
     max_tokens: int = 4096,
     extract_markers: tuple[str, str] | None = None,
+    hitl_mode: str = "manual",
 ) -> dict:
-    """Run one Claude<->tool conversation until the model stops calling
-    tools or a cap is hit. This is the mechanics every agent in this repo
-    shares -- what differs per agent is the system prompt, the tool
-    allowlist, and what it does with the result afterward.
+    """Run one model<->tool conversation until the model stops calling tools
+    or a cap is hit. This is the mechanics every agent in this repo shares --
+    what differs per agent is the system prompt, the tool allowlist, and what
+    it does with the result afterward.
+
+    hitl_mode controls the approval gate for require_approval tools:
+      - "auto": never prompt, every tool call executes immediately.
+      - "manual": confirm_tool_call() prompts on every gated call.
+      - "plan": one confirm_plan_for_run() prompt before the first gated call
+        this run makes; that decision governs every gated call for the rest
+        of this run_tool_loop invocation (one finding, for exploit/verify).
 
     Returns {transcript, extracted_blocks, tool_call_count, stop_reason}.
     extracted_blocks is populated only if extract_markers is given.
     """
-    messages = [{"role": "user", "content": initial_message}]
+    assert hitl_mode in HITL_MODES, f"unknown hitl_mode {hitl_mode!r}, expected one of {HITL_MODES}"
+
+    messages: list[Turn] = [Turn(role="user", text=initial_message)]
     transcript: list[dict] = []
     extracted_blocks: list[dict] = []
     start_time = time.monotonic()
     tool_call_count = 0
     stop_reason_final = "unknown"
+    plan_decision: bool | None = None  # only used when hitl_mode == "plan"
+    gated_tool_names = {t["name"] for t in tool_defs if (manifest.get(t["name"]) or None) and manifest[t["name"]].require_approval}
 
     while True:
         elapsed_minutes = (time.monotonic() - start_time) / 60.0
@@ -205,64 +306,64 @@ async def run_tool_loop(
             stop_reason_final = "iteration_cap"
             break
 
-        async with anthropic_client.messages.stream(
-            model=model,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            tools=tool_defs,
-            messages=messages,
-        ) as stream:
-            async for _ in stream:
-                pass
-            response = await stream.get_final_message()
+        response = await model_adapter.send_messages(system_prompt, messages, tool_defs, max_tokens)
 
-        assistant_text = "\n".join(block.text for block in response.content if block.type == "text")
+        assistant_text = response.text
         if extract_markers:
             extracted_blocks.extend(extract_blocks(assistant_text, *extract_markers))
 
-        messages.append({"role": "assistant", "content": response.content})
+        messages.append(Turn(role="assistant", text=assistant_text, tool_calls=response.tool_calls))
 
-        tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
-
-        if not tool_use_blocks:
+        if not response.tool_calls:
             stop_reason_final = response.stop_reason or "end_turn"
             break
 
-        tool_results = []
-        for block in tool_use_blocks:
+        tool_results: list[ToolResult] = []
+        for call in response.tool_calls:
             if tool_call_count >= max_iterations:
                 tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": "Iteration cap reached; tool not executed.",
-                        "is_error": True,
-                    }
+                    ToolResult(
+                        tool_call_id=call.id,
+                        content="Iteration cap reached; tool not executed.",
+                        is_error=True,
+                    )
                 )
                 continue
 
             tool_call_count += 1
             call_started = _now_iso()
-            output, is_error = await execute_tool(session, block.name, block.input)
+
+            if hitl_mode == "auto":
+                approved, final_input = True, call.input
+            elif hitl_mode == "plan":
+                meta = manifest.get(call.name)
+                if meta is None or not meta.require_approval:
+                    approved, final_input = True, call.input
+                else:
+                    if plan_decision is None:
+                        plan_decision = confirm_plan_for_run(gated_tool_names)
+                    approved, final_input = plan_decision, call.input
+            else:  # "manual"
+                approved, final_input = confirm_tool_call(call.name, call.input, manifest)
+
+            if not approved:
+                output = {"error": "Tool call denied by operator (HITL gate)."}
+                is_error = True
+            else:
+                output, is_error = await execute_tool(session, call.name, final_input)
+
             transcript.append(
                 {
                     "timestamp": call_started,
-                    "tool": block.name,
-                    "input": block.input,
+                    "tool": call.name,
+                    "input": final_input,
                     "output": output,
                     "model_reasoning_text": assistant_text,
                 }
             )
-            tool_results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(output),
-                    "is_error": is_error,
-                }
-            )
+            tool_results.append(ToolResult(tool_call_id=call.id, content=json.dumps(output), is_error=is_error))
 
-        messages.append({"role": "user", "content": tool_results})
+        messages.append(Turn(role="user", tool_results=tool_results))
 
         if tool_call_count >= max_iterations:
             stop_reason_final = "iteration_cap"

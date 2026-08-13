@@ -58,6 +58,7 @@ async def _run_full_flow(scope_dir: str):
                 "probe_variant",
                 "execute_python",
                 "replay_probe",
+                "lookup_attack_technique",
             }
 
             # --- fileops: within scope ---

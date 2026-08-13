@@ -38,6 +38,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verify-per-finding-max-iterations", type=int, default=6)
     parser.add_argument("--verify-per-finding-max-minutes", type=float, default=5.0)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--provider",
+        default="anthropic",
+        help="Model provider adapter to use (default anthropic; see models/__init__.py)",
+    )
+    parser.add_argument(
+        "--hitl-mode",
+        choices=["auto", "manual", "plan"],
+        default="auto",
+        help=(
+            "Human-in-the-loop approval for gated tools (probe_variant/execute_python/"
+            "replay_probe/network_exploit): 'auto' never prompts, 'manual' prompts "
+            "every gated call, 'plan' prompts once per run/finding and applies that "
+            "decision to every gated call after. Default: auto."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -57,6 +73,8 @@ async def main_async(args: argparse.Namespace) -> int:
         objective=args.objective,
         scope_dir=scope_dir,
         model=args.model,
+        provider=args.provider,
+        hitl_mode=args.hitl_mode,
         findings_path=args.findings_path,
         max_iterations=args.recon_max_iterations,
         max_minutes=args.recon_max_minutes,
@@ -77,6 +95,8 @@ async def main_async(args: argparse.Namespace) -> int:
         scope_dir=scope_dir,
         findings_path=args.findings_path,
         model=args.model,
+        provider=args.provider,
+        hitl_mode=args.hitl_mode,
         per_finding_max_iterations=args.exploit_per_finding_max_iterations,
         per_finding_max_minutes=args.exploit_per_finding_max_minutes,
     )
@@ -88,6 +108,8 @@ async def main_async(args: argparse.Namespace) -> int:
         scope_dir=scope_dir,
         findings_path=args.findings_path,
         model=args.model,
+        provider=args.provider,
+        hitl_mode=args.hitl_mode,
         per_finding_max_iterations=args.verify_per_finding_max_iterations,
         per_finding_max_minutes=args.verify_per_finding_max_minutes,
     )

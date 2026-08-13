@@ -20,18 +20,24 @@ class ToolMeta:
     category: str
     description: str
     timeout_seconds: int
+    require_approval: bool
 
 
 def load_manifest(path: str = _MANIFEST_PATH) -> dict[str, ToolMeta]:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
+    categories = raw.get("categories") or {}
+
     tools: dict[str, ToolMeta] = {}
     for name, entry in (raw.get("tools") or {}).items():
+        category = entry["category"]
+        category_cfg = categories.get(category) or {}
         tools[name] = ToolMeta(
             name=name,
-            category=entry["category"],
+            category=category,
             description=(entry.get("description") or "").strip(),
             timeout_seconds=int(entry.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)),
+            require_approval=bool(category_cfg.get("require_approval", False)),
         )
     return tools

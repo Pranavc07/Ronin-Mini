@@ -16,12 +16,12 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-import anthropic
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 import agent_core  # noqa: E402
+import models  # noqa: E402
 
 ALLOWED_CATEGORIES = {"verify"}
 
@@ -59,15 +59,16 @@ def _save_findings(findings_path: str, findings: list[dict]) -> None:
 
 
 async def _process_one_finding(
-    client,
+    model_adapter: models.ModelAdapter,
     session: ClientSession,
-    model: str,
+    manifest: dict,
     target: str,
     finding: dict,
     tool_defs: list[dict],
     max_iterations: int,
     max_minutes: float,
     max_tokens: int,
+    hitl_mode: str = "auto",
 ) -> tuple[dict, str]:
     system_prompt = build_system_prompt(target, finding, tool_defs)
     initial_message = (
@@ -77,9 +78,9 @@ async def _process_one_finding(
     )
 
     result = await agent_core.run_tool_loop(
-        client,
+        model_adapter,
         session,
-        model,
+        manifest,
         system_prompt,
         tool_defs,
         initial_message,
@@ -87,6 +88,7 @@ async def _process_one_finding(
         max_minutes,
         max_tokens,
         extract_markers=(VERIFY_START, VERIFY_END),
+        hitl_mode=hitl_mode,
     )
 
     verdicts = [b for b in result["extracted_blocks"] if b.get("status") in ("verified", "false_positive")]
@@ -120,6 +122,8 @@ async def run_verify_agent(
     scope_dir: str,
     findings_path: str,
     model: str,
+    provider: str = "anthropic",
+    hitl_mode: str = "auto",
     per_finding_max_iterations: int = 6,
     per_finding_max_minutes: float = 5.0,
     max_tokens: int = 4096,
@@ -132,7 +136,7 @@ async def run_verify_agent(
         data = json.load(f)
     findings = data.get("findings", [])
 
-    client = anthropic.AsyncAnthropic()
+    model_adapter = models.build_adapter(provider, model)
     # The server needs the findings path so replay_probe can look up winning attempts.
     server_params = agent_core.mcp_server_params(scope_dir, allowed_hosts, findings_path=findings_path)
 
@@ -155,15 +159,16 @@ async def run_verify_agent(
                 _save_findings(findings_path, findings)
 
                 attempt, outcome_status = await _process_one_finding(
-                    client,
+                    model_adapter,
                     session,
-                    model,
+                    manifest,
                     target,
                     finding,
                     tool_defs,
                     per_finding_max_iterations,
                     per_finding_max_minutes,
                     max_tokens,
+                    hitl_mode=hitl_mode,
                 )
                 finding.setdefault("verify_attempts", []).append(attempt)
                 finding["status"] = outcome_status

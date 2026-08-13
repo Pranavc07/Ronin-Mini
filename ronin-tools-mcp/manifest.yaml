@@ -1,9 +1,19 @@
 # Registry of every tool the Ronin MCP tool server exposes.
 #
-# category: recon | web_exploit | network_exploit | fileops
+# category: recon | web_exploit | network_exploit | fileops | verify | attack_reference
 # timeout_seconds bounds a single tool call server-side (executor.py enforces it).
-# This file is the single source of truth for both: server-side per-tool
-# timeouts, and client-side category-based tool allowlisting.
+# This file is the single source of truth for: server-side per-tool timeouts,
+# client-side category-based tool allowlisting, and each category's HITL
+# require_approval default (see the categories: block below).
+
+categories:
+  recon: {require_approval: false}
+  fileops: {require_approval: false}
+  attack_reference: {require_approval: false}
+  web_exploit: {require_approval: true}      # probe_variant
+  exploit_runtime: {require_approval: true}  # execute_python
+  verify: {require_approval: true}           # replay_probe
+  network_exploit: {require_approval: true}  # reserved for Phase 2's Kali tools -- gated by default from day one
 
 tools:
   http_request:
@@ -55,5 +65,15 @@ tools:
       output for each. A literal replay for independent verification -- not new
       exploration. The only tool the verify agent is given.
     timeout_seconds: 120
+
+  lookup_attack_technique:
+    category: attack_reference
+    description: >
+      Look up MITRE ATT&CK technique(s) by ID (e.g. "T1190") or free-text
+      keyword search across technique name/description. Returns id, name,
+      tactic(s), and description. Use when no vulnerability-specific skill
+      methodology is available for a finding, to ground your testing
+      approach in a real technique rather than guessing.
+    timeout_seconds: 5
 
 # network_exploit: reserved for a future part. No tools registered yet.

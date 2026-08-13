@@ -5,3 +5,4 @@ transcript_*.json
 findings.json
 findings_*.json
 .env
+ronin-tools-mcp/data/enterprise-attack-raw.json

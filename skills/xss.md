@@ -1,3 +1,10 @@
+---
+status: full
+cwe: CWE-79
+attack_technique: T1190
+attack_tactic: Initial Access
+---
+
 # Cross-Site Scripting (XSS)
 
 Confirming XSS means showing attacker-controlled input is returned in a page in

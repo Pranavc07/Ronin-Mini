@@ -9,12 +9,12 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-import anthropic
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 import agent_core  # noqa: E402
+import models  # noqa: E402
 
 ALLOWED_CATEGORIES = {"recon", "fileops"}
 
@@ -45,6 +45,8 @@ async def run_recon_agent(
     scope_dir: str,
     model: str,
     findings_path: str,
+    provider: str = "anthropic",
+    hitl_mode: str = "auto",
     max_iterations: int = 40,
     max_minutes: float = 20.0,
     max_tokens: int = 4096,
@@ -53,7 +55,7 @@ async def run_recon_agent(
     if allowed_hosts is None:
         allowed_hosts = [urlparse(target).hostname or target]
 
-    client = anthropic.AsyncAnthropic()
+    model_adapter = models.build_adapter(provider, model)
     server_params = agent_core.mcp_server_params(scope_dir, allowed_hosts)
 
     async with stdio_client(server_params) as (read, write):
@@ -70,9 +72,9 @@ async def run_recon_agent(
             initial_message = f"Begin reconnaissance against {target}. Objective: {objective}"
 
             result = await agent_core.run_tool_loop(
-                client,
+                model_adapter,
                 session,
-                model,
+                manifest,
                 system_prompt,
                 tool_defs,
                 initial_message,
@@ -80,6 +82,7 @@ async def run_recon_agent(
                 max_minutes,
                 max_tokens,
                 extract_markers=(agent_core.FINDING_START, agent_core.FINDING_END),
+                hitl_mode=hitl_mode,
             )
 
     findings = []

@@ -45,7 +45,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-iterations", type=int, default=40, help="Max tool calls (default 40)")
     parser.add_argument("--max-minutes", type=float, default=20.0, help="Wall-clock cap in minutes (default 20)")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Claude model ID (default {DEFAULT_MODEL})")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Model ID (default {DEFAULT_MODEL})")
+    parser.add_argument(
+        "--provider",
+        default="anthropic",
+        help="Model provider adapter to use (default anthropic; see models/__init__.py)",
+    )
+    parser.add_argument(
+        "--hitl-mode",
+        choices=["auto", "manual", "plan"],
+        default="auto",
+        help=(
+            "Human-in-the-loop approval for gated tools (probe_variant/execute_python/"
+            "replay_probe/network_exploit): 'auto' never prompts, 'manual' prompts "
+            "every gated call, 'plan' prompts once per run and applies that decision "
+            "to every gated call after. Default: auto."
+        ),
+    )
     parser.add_argument(
         "--output-dir",
         default=".",
@@ -68,7 +84,9 @@ def main() -> int:
     print(f"[+] Target:      {args.target}")
     print(f"[+] Objective:   {args.objective}")
     print(f"[+] Scope dir:   {scope_dir}")
+    print(f"[+] Provider:    {args.provider}")
     print(f"[+] Model:       {args.model}")
+    print(f"[+] HITL mode:   {args.hitl_mode}")
     print(f"[+] Max iters:   {args.max_iterations}   Max minutes: {args.max_minutes}")
     print("[+] Starting agent loop...\n")
 
@@ -78,6 +96,8 @@ def main() -> int:
             objective=args.objective,
             scope_dir=scope_dir,
             model=args.model,
+            provider=args.provider,
+            hitl_mode=args.hitl_mode,
             max_iterations=args.max_iterations,
             max_minutes=args.max_minutes,
         )

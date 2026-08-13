@@ -1,3 +1,10 @@
+---
+status: full
+cwe: CWE-89
+attack_technique: T1190
+attack_tactic: Initial Access
+---
+
 # SQL Injection
 
 Confirming a SQL injection means showing the input reaches a SQL query in a way

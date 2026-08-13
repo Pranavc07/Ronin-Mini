@@ -1,3 +1,10 @@
+---
+status: full
+cwe: CWE-287
+attack_technique: T1190
+attack_tactic: Initial Access
+---
+
 # Authentication / Authorization Bypass
 
 Confirming an auth bypass means reaching a protected resource or action WITHOUT

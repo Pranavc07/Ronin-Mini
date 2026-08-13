@@ -1,3 +1,10 @@
+---
+status: full
+cwe: CWE-639
+attack_technique: T1190
+attack_tactic: Initial Access
+---
+
 # IDOR (Insecure Direct Object Reference)
 
 Confirming an IDOR means showing that changing an object identifier lets you
