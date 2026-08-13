@@ -110,12 +110,31 @@ tools have grown provider-specific assumptions):
   multi-step surface, which arrives with Phase 2's Kali tools).
 
 ## Phase 2 — Kali Attack Box
+**Status: shipped, integration-tested against DVWA (2026-08-13); Metasploitable-specific live check pending (no Metasploitable target in this environment yet)**
 **Test against: Metasploitable (primary), a VulnHub box (secondary)**
 
-- Persistent Kali container, targeted via `executor.run_in_container` (same sandboxing pattern as `execute_python`, but long-lived not ephemeral).
-- Start narrow: `nmap`, `nikto`, `sqlmap`, `hydra` — wrappers in `categories/network_exploit.py`, manifest entries with strict `input_schema` (whitelisted flags, no raw shell strings).
-- All Kali tool calls HITL-gated by default (mandatory, not agent-configurable) — matches Pentest Copilot's own safety model.
+- Persistent Kali container (`ronin-kali-box`, `docker exec` per call, not
+  ephemeral like `execute_python`) built from a purpose-built, reproducible
+  `ronin-tools-mcp/docker/kali-tools.Dockerfile` (`kalilinux/kali-rolling` +
+  exactly the packages Ronin needs — see `CLAUDE.md`).
+- Seven tools in `categories/network_exploit.py`, all structured params /
+  enums / regex-validated, never raw flags: `nmap`, `nikto`, `sqlmap`,
+  `hydra` (the original "start narrow" four) plus `gobuster` (content
+  discovery — a gap nmap/nikto don't cover), `enum4linux` (SMB enumeration —
+  Metasploitable's headline vulnerable service), `searchsploit` (offline
+  exploit-db lookup, gives nmap's service/version output somewhere to go).
+  Hydra/gobuster wordlists come from Kali's own real `wordlists`/`seclists`
+  packages, referenced by a fixed enum resolved to real on-image paths —
+  never a raw path from the model.
+- All Kali tool calls HITL-gated by default via `manifest.yaml`'s
+  `network_exploit` category (`require_approval: true`, inherits the
+  Phase 0 `hitl_mode` system like any other gated category — no
+  special-casing).
 - `network_exploit` category → exploit_agent's allowlist only. Recon stays HTTP/DNS-only; active scanning is a different risk tier from passive requests, keep that boundary.
+- Loopback-host translation (`localhost` → `host.docker.internal` after
+  scope validation) needed since these tools run *inside* the Kali
+  container — caught by the integration test, not anticipated in the
+  original design.
 
 ## Phase 3 — MongoDB (replaces findings.json)
 - Skip SQLite as an intermediate step — you're running a DB server eventually regardless (Redis + dashboard both assume one), and Mongo's flexible schema fits the genuinely heterogeneous tool output you're about to ingest (nmap XML, sqlmap output, Burp results all look structurally different).

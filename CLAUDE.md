@@ -104,7 +104,8 @@ subprocess per run. Tools are grouped into categories under
   skill's `attack_technique` id and reason from the returned description
   instead of guessing. Deliberately not a live/networked lookup — no
   third-party runtime dependency.
-- `network_exploit` → reserved, empty stub
+- `network_exploit` → `nmap`, `nikto`, `sqlmap`, `hydra`, `gobuster`,
+  `enum4linux`, `searchsploit` — Phase 2's Kali attack box tools (see below).
 
 `probe_variant` / `execute_python` each have their execution body extracted to a
 module-level `run_*` function so `replay_probe` reuses the identical scope-checked
@@ -172,6 +173,41 @@ write code when it genuinely doesn't — matched tool calls are faster and easie
 to audit. Empirically: JSON/REST targets (Juice Shop) lean on probe_variant;
 HTML-form/session-cookie targets (DVWA) lean on execute_python.
 
+## Kali attack box (network_exploit)
+
+`ronin-tools-mcp/docker/kali-tools.Dockerfile` — a purpose-built,
+reproducible image (`kalilinux/kali-rolling` base + `apt-get install`
+exactly `nmap`, `nikto`, `sqlmap`, `hydra`, `wordlists`, `seclists`,
+`gobuster`, `enum4linux-ng`, `exploitdb`). Deliberately narrow: exactly what
+Ronin needs today, not the full Kali toolset — same discipline as
+`skills/*.md` growing 4 → 14, new tools get added one at a time when a
+concrete capability gap shows up, not preemptively.
+
+Unlike `execute_python`'s ephemeral per-call containers, this is a
+**long-lived** container (`executor.ensure_kali_container_ready()` builds
+the image + starts `ronin-kali-box` once, idempotent; `run_in_kali_container(args, timeout)`
+runs `docker exec ronin-kali-box <args>` per call — `args` is always a real
+argv list, never a shell string, so there's no shell for injected
+metacharacters to reach regardless of parameter content).
+
+Every tool in `categories/network_exploit.py` takes structured, typed
+parameters only — enums for scan types/wordlists, regex-validated port
+strings, no raw flag passthrough — and validates its target through
+`scope.validate_host` before building a command. `searchsploit` is the one
+exception: it's a local offline exploit-db lookup with no target host at
+all (see its docstring).
+
+**Loopback host translation**: these tools run *inside* the Kali container,
+so a target of `localhost`/`127.0.0.1` (how DVWA/Juice Shop's scope is
+configured) means the container itself, not the actual test target.
+`network_exploit.py`'s `_container_target`/`_container_url` translate
+loopback hosts to `host.docker.internal` *after* `scope.validate_host`
+confirms the original host is authorized — validation always checks what
+the operator actually allowlisted; only the argv sent into the container
+uses the translated address. (Caught by the integration test: without this,
+`nmap localhost` would scan the Kali box itself and always report nothing
+open.)
+
 ## Deliberate non-goals (do not add without being asked)
 
 No Kafka, no Postgres/database, no service framework, no message queue, no
@@ -199,8 +235,11 @@ Everything is authorized-testing-only; both apps exist to be broken. Scope
 
 `pytest tests/` — `test_scope.py` (unit, no deps), `test_mcp_server.py` +
 `test_execute_python.py` (spin up real server/Docker), `test_e2e.py` (needs
-`ANTHROPIC_API_KEY`, else skips). NOTE: `test_execute_python.py` currently
-*errors* (not skips) when the Docker daemon is down — its guard only checks the
+`ANTHROPIC_API_KEY`, else skips), `test_network_exploit.py` (unit, mocked
+`run_in_kali_container`, no Docker needed) + `test_network_exploit_integration.py`
+(real Docker + the real `ronin-kali-box` container against DVWA — first run
+builds the ~4GB image). NOTE: `test_execute_python.py` currently *errors*
+(not skips) when the Docker daemon is down — its guard only checks the
 binary exists. Harmless; a known 2-line fix if it annoys you.
 
 ## Current state
@@ -211,5 +250,10 @@ binary exists. Harmless; a known 2-line fix if it annoys you.
   fallback tool) and Phase 0 (HITL gate w/ 3 modes + model-agnostic
   `ModelAdapter`) both shipped and live-tested end-to-end against DVWA --
   full recon->exploit->verify pipeline completed, every stub-type finding
-  used the `lookup_attack_technique` fallback and reached `verified`. See
+  used the `lookup_attack_technique` fallback and reached `verified`.
+  Phase 2 (Kali attack box, 7 tools: nmap/nikto/sqlmap/hydra/gobuster/
+  enum4linux/searchsploit) implemented and integration-tested against DVWA
+  (real Docker, real container); the Metasploitable-specific live check
+  (hydra/enum4linux against real weak-cred/SMB findings) is still pending --
+  no Metasploitable target exists in this environment yet. See
   `docs/roadmap.md` for the full phase plan.

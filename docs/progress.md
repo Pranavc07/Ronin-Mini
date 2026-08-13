@@ -5,6 +5,36 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-13 — Phase 2 (Kali attack box) built and integration-tested
+- New `ronin-tools-mcp/docker/kali-tools.Dockerfile` (kalilinux/kali-rolling
+  + nmap/nikto/sqlmap/hydra/wordlists/seclists/gobuster/enum4linux-ng/
+  exploitdb, ~4.3GB built image). `executor.py` gained
+  `ensure_kali_container_ready()`/`run_in_kali_container()` for a long-lived
+  container (`ronin-kali-box`, `docker exec` per call) rather than
+  execute_python's ephemeral-per-call pattern.
+- `categories/network_exploit.py`: 7 tools (nmap, nikto, sqlmap, hydra,
+  gobuster, enum4linux, searchsploit), all structured params/enums, no raw
+  flags. Started at the roadmap's original 4, extended to 7 after
+  identifying concrete gaps (content discovery, SMB enum, exploit-db
+  lookup) -- each got the same parameter-design review/sign-off as the
+  original four before any code was written.
+- Real bugs caught by the Docker-integration test (not the mocked unit
+  tests): nmap's `-F` and `-p` flags are mutually exclusive -- fixed by
+  dropping `-F` when explicit ports are given; gobuster's guessed "medium"
+  wordlist filename was wrong (actual: `DirBuster-2007_directory-list-2.3-
+  medium.txt`) -- fixed by listing the real installed seclists tree instead
+  of guessing. Also added loopback-host translation
+  (`localhost`->`host.docker.internal`) since these tools run inside the
+  Kali container, not through a scope-checked helper like execute_python --
+  without it every scan would hit the Kali box itself instead of DVWA/Juice
+  Shop.
+- 32 unit tests (mocked `run_in_kali_container`) + 3 real Docker/DVWA
+  integration tests all pass. Both roadmap copies + CLAUDE.md updated.
+- NEXT: Metasploitable-specific live check (hydra/enum4linux against real
+  weak-cred/SMB findings) needs a Metasploitable target stood up in this
+  environment -- none exists yet, out of scope to provision as part of this
+  session. Everything else in Phase 2 is uncommitted on `main`.
+
 ## 2026-08-11 — Phase 0 (HITL gate + model-agnostic adapter) + Phase 1.5 (ATT&CK/CWE) built
 - Phase 0: new `models/` package (`base.py`'s `ModelAdapter`/`Turn`/`ToolCall`/
   `ToolResult`/`ModelResponse`, `anthropic_adapter.py`'s `AnthropicAdapter`,

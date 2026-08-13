@@ -76,4 +76,52 @@ tools:
       approach in a real technique rather than guessing.
     timeout_seconds: 5
 
-# network_exploit: reserved for a future part. No tools registered yet.
+  nmap:
+    category: network_exploit
+    description: >
+      Scan a target with nmap. scan_type: "quick", "service_version",
+      "default_scripts", or "full_port_range". Optional ports restricts to
+      specific ports/ranges.
+    timeout_seconds: 300
+
+  nikto:
+    category: network_exploit
+    description: >
+      Run nikto against a target web server to find known-vulnerable
+      files/CGIs, outdated software, and misconfigurations.
+    timeout_seconds: 120
+
+  sqlmap:
+    category: network_exploit
+    description: >
+      Run sqlmap against a URL to detect and exploit SQL injection.
+      Non-interactive (--batch) always.
+    timeout_seconds: 300
+
+  hydra:
+    category: network_exploit
+    description: >
+      Brute-force credentials against an ssh or ftp service. Wordlists only
+      (rockyou/common_top100/top_usernames), never a raw filesystem path.
+    timeout_seconds: 120
+
+  gobuster:
+    category: network_exploit
+    description: >
+      Content-discovery scan against a web target (dir mode only). Fixed
+      seclists wordlist enum (common/medium), fixed extension set.
+    timeout_seconds: 180
+
+  enum4linux:
+    category: network_exploit
+    description: >
+      Enumerate a target's SMB service with enum4linux-ng. level: "basic"
+      (fast) or "full" (comprehensive).
+    timeout_seconds: 180
+
+  searchsploit:
+    category: network_exploit
+    description: >
+      Search the local, offline exploit-db database for known exploits
+      matching a service name/version. No network access.
+    timeout_seconds: 30
