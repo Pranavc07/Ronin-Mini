@@ -252,8 +252,12 @@ binary exists. Harmless; a known 2-line fix if it annoys you.
   full recon->exploit->verify pipeline completed, every stub-type finding
   used the `lookup_attack_technique` fallback and reached `verified`.
   Phase 2 (Kali attack box, 7 tools: nmap/nikto/sqlmap/hydra/gobuster/
-  enum4linux/searchsploit) implemented and integration-tested against DVWA
-  (real Docker, real container); the Metasploitable-specific live check
-  (hydra/enum4linux against real weak-cred/SMB findings) is still pending --
-  no Metasploitable target exists in this environment yet. See
-  `docs/roadmap.md` for the full phase plan.
+  enum4linux/searchsploit) implemented and live-tested against DVWA (Docker
+  integration) and a real Metasploitable box (nmap fingerprinted vsftpd
+  2.3.4/Samba, enum4linux-ng pulled real SMB shares, searchsploit found the
+  real CVE-2011-2523 backdoor off nmap's own output). KNOWN GAP: this
+  testing was tool-level only -- recon_agent has no network_exploit access
+  and the finding-type vocabulary is entirely web-vuln-class, so there is
+  currently no path for a full agent pipeline run to ever reach these tools
+  on its own. See `docs/roadmap.md` for the full phase plan and this gap's
+  writeup.

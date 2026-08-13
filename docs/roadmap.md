@@ -110,7 +110,7 @@ tools have grown provider-specific assumptions):
   multi-step surface, which arrives with Phase 2's Kali tools).
 
 ## Phase 2 — Kali Attack Box
-**Status: shipped, integration-tested against DVWA (2026-08-13); Metasploitable-specific live check pending (no Metasploitable target in this environment yet)**
+**Status: shipped, live-tested against DVWA + real Metasploitable (2026-08-13) — nmap correctly fingerprinted vsftpd 2.3.4/Samba 3.0.20, enum4linux-ng pulled real SMB shares, searchsploit found the real CVE-2011-2523 backdoor off nmap's own output, hydra confirmed real SSH attack connectivity. Tool-level only — see the known gap below.**
 **Test against: Metasploitable (primary), a VulnHub box (secondary)**
 
 - Persistent Kali container (`ronin-kali-box`, `docker exec` per call, not
@@ -135,6 +135,16 @@ tools have grown provider-specific assumptions):
   scope validation) needed since these tools run *inside* the Kali
   container — caught by the integration test, not anticipated in the
   original design.
+- **Known gap, surfaced by the Metasploitable live check, not yet fixed**:
+  `recon_agent` has no `network_exploit` access and the 14-word finding-type
+  vocabulary is entirely web-vuln-class — there is currently no path for a
+  full `recon → exploit → verify` pipeline run to ever hand `exploit_agent`
+  a finding that would make it reach for these tools. All 7 are real and
+  tool-level tested, but not yet reachable through the actual agent
+  pipeline end-to-end. Needs its own scoped pass (network-layer finding
+  types + either narrow nmap-discovery access for recon, or another way to
+  seed network-layer findings) before this phase is genuinely
+  agent-usable, not just tool-usable.
 
 ## Phase 3 — MongoDB (replaces findings.json)
 - Skip SQLite as an intermediate step — you're running a DB server eventually regardless (Redis + dashboard both assume one), and Mongo's flexible schema fits the genuinely heterogeneous tool output you're about to ingest (nmap XML, sqlmap output, Burp results all look structurally different).

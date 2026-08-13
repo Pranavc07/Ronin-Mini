@@ -30,10 +30,26 @@ each work session with: what changed, what's in progress, next concrete step.
   Shop.
 - 32 unit tests (mocked `run_in_kali_container`) + 3 real Docker/DVWA
   integration tests all pass. Both roadmap copies + CLAUDE.md updated.
-- NEXT: Metasploitable-specific live check (hydra/enum4linux against real
-  weak-cred/SMB findings) needs a Metasploitable target stood up in this
-  environment -- none exists yet, out of scope to provision as part of this
-  session. Everything else in Phase 2 is uncommitted on `main`.
+- Metasploitable live check DONE (2026-08-13, user stood up a real
+  Metasploitable at 192.168.56.5): ran the 7 tools directly (tool-level, not
+  through an agent -- see the gap noted below) against a real target.
+  `nmap default_scripts` correctly fingerprinted vsftpd 2.3.4, anonymous FTP,
+  Samba 3.0.20, and every classic Metasploitable open port; `enum4linux-ng`
+  pulled real domain/OS info and all 5 SMB shares (incl. the world-writable
+  `tmp` share); `searchsploit "vsftpd 2.3.4"` found the actual CVE-2011-2523
+  backdoor exploit off nmap's own output -- exactly the gap that tool was
+  added to close; `hydra` confirmed real connectivity and a real attack
+  in-flight against SSH (didn't finish within a bounded timeout against
+  10k real password attempts -- expected, not a bug).
+- GAP SURFACED, not yet fixed: `recon_agent` has no `network_exploit`
+  access and the 14-word finding-type vocabulary is entirely web-vuln-class
+  -- there is currently no path for a full `recon -> exploit -> verify`
+  pipeline run to ever hand `exploit_agent` a finding that would make it
+  reach for `nmap`/`hydra`/etc. Today's Kali tools are real and tested at
+  the tool level, but not yet reachable through the actual agent pipeline
+  end-to-end. Needs its own scoped pass (network-layer finding types +
+  either recon getting narrow nmap-discovery access, or a way to seed
+  network-layer findings directly) -- not done as part of Phase 2.
 
 ## 2026-08-11 — Phase 0 (HITL gate + model-agnostic adapter) + Phase 1.5 (ATT&CK/CWE) built
 - Phase 0: new `models/` package (`base.py`'s `ModelAdapter`/`Turn`/`ToolCall`/
