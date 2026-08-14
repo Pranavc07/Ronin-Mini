@@ -5,6 +5,37 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-15 — Added metasploit (exploit_agent-only)
+- New `metasploit_exploit` category (separate from `network_exploit` so it
+  can go to `exploit_agent` only, not `recon_agent` -- explicit user
+  direction). `categories/metasploit.py`'s `metasploit` tool runs a real
+  Metasploit module against a scope-validated target inside the same
+  long-lived Kali container, via a generated resource script (`docker exec
+  -i ... tee` to write it in, no bind mount available on this container).
+- Two explicit, deliberate exceptions to this repo's usual discipline, by
+  user choice after I proposed narrower alternatives and they declined
+  both: `module` is free-text (no curated allowlist), and reverse-shell
+  payloads are supported (`payload`/`lhost`/`lport`). What's still
+  enforced: scope validation, a resource-script newline-injection guard,
+  and `lport` must fall in a fixed published range
+  (`executor.KALI_LPORT_RANGE`, 44440-44450) -- `ensure_kali_container_ready()`
+  now publishes that range and recreates the container if an existing one
+  predates it (Docker can't add port publishing after creation).
+- `skills/known_vulnerable_service.md` + `agents/exploit.md` updated:
+  prefer `metasploit` over hand-rolled `execute_python` when a matching
+  module exists, `execute_python` stays the fallback.
+- 13 new unit tests (mocked) + a Docker-integration test file (metasploit-
+  framework installed, a real module run against a closed port completes
+  without hanging). Image rebuild with `metasploit-framework` (~4.3GB+)
+  kicked off; still running as of this entry -- confirm it finished and the
+  integration test actually passes before considering this shipped.
+- NEXT: once the image build finishes, run the full suite + the new
+  integration tests, then the live check -- exploit_agent should call
+  `metasploit` with `exploit/unix/ftp/vsftpd_234_backdoor` against the real
+  Metasploitable box and get a real session-opened result. Everything here
+  is uncommitted on `main`, stacked on top of the also-uncommitted
+  recon-agent-access fix below.
+
 ## 2026-08-14 — Closed the recon->network_exploit reachability gap
 - Reconsidered the Phase 2 boundary decision after the user pushed back:
   `recon_agent.ALLOWED_CATEGORIES` now includes `network_exploit` (real

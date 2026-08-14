@@ -24,6 +24,14 @@ KALI_CONTAINER_NAME = "ronin-kali-box"
 _KALI_DOCKERFILE_PATH = os.path.join(_DOCKERFILE_DIR, "kali-tools.Dockerfile")
 KALI_BUILD_TIMEOUT_SECONDS = 1800  # apt-installing nmap/sqlmap/exploitdb etc. is much slower than the execute_python image
 
+# Fixed, modest published port range for metasploit's reverse-payload
+# listeners -- not "any port," so categories/metasploit.py can validate
+# `lport` against something concrete instead of silently opening a listener
+# nothing can reach. Docker Desktop on Windows publishes container ports to
+# all host interfaces by default, so an external target can reach these via
+# the host's IP on whatever network route exists (see CLAUDE.md's LHOST note).
+KALI_LPORT_RANGE = (44440, 44450)
+
 
 def truncate(text: str | None, limit: int = MAX_OUTPUT_CHARS) -> str:
     if text is None:
@@ -167,12 +175,63 @@ def run_docker_python(scratch_dir: str, timeout: int) -> dict:
     }
 
 
+def _kali_container_exists() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", KALI_CONTAINER_NAME, "--format", "{{.State.Running}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
+def _kali_container_has_published_ports() -> bool:
+    """Checked via the container's own config (works whether it's running or
+    stopped), not `docker port` (which is unreliable on stopped containers).
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", KALI_CONTAINER_NAME, "--format", "{{json .HostConfig.PortBindings}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        return False
+    if result.returncode != 0:
+        return False
+    return f"{KALI_LPORT_RANGE[0]}/tcp" in result.stdout
+
+
+def _create_kali_container() -> dict | None:
+    port_range = f"{KALI_LPORT_RANGE[0]}-{KALI_LPORT_RANGE[1]}"
+    run = subprocess.run(
+        [
+            "docker", "run", "-d", "--name", KALI_CONTAINER_NAME,
+            "--network", "bridge",
+            "--add-host", "host.docker.internal:host-gateway",
+            "-p", f"{port_range}:{port_range}",  # metasploit reverse-payload listeners
+            KALI_IMAGE, "sleep", "infinity",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if run.returncode != 0:
+        return {"error": f"Failed to start {KALI_CONTAINER_NAME}: {truncate(run.stderr)}"}
+    return None
+
+
 def ensure_kali_container_ready() -> dict | None:
-    """Build the network_exploit Kali image if it isn't already present, and
-    make sure a long-lived container from it is running. Unlike
-    execute_python's ephemeral per-call containers, this one is started once
-    and reused across tool calls -- nmap/sqlmap/etc. run via `docker exec`
-    against it. Idempotent: a no-op after the first successful call.
+    """Build the Kali image if it isn't already present, and make sure a
+    long-lived container from it is running with the metasploit reverse-
+    payload port range published. Unlike execute_python's ephemeral
+    per-call containers, this one is started once and reused across tool
+    calls -- nmap/sqlmap/msfconsole/etc. run via `docker exec` against it.
+    Idempotent: a no-op after the first successful call.
 
     Returns an error dict on failure, None on success.
     """
@@ -196,6 +255,19 @@ def ensure_kali_container_ready() -> dict | None:
         if build.returncode != 0:
             return {"error": f"Failed to build {KALI_IMAGE}: {truncate(build.stderr)}"}
 
+    if not _kali_container_exists():
+        return _create_kali_container()
+
+    if not _kali_container_has_published_ports():
+        # Docker can't add port publishing to an already-created container --
+        # the only way to get the metasploit LPORT range published is to
+        # remove and recreate it. This is a real behavior change from a
+        # previously-created container (e.g. from before this port range
+        # existed) and will lose anything running inside it (nothing persists
+        # in this container by design -- it's stateless tooling, not data).
+        subprocess.run(["docker", "rm", "-f", KALI_CONTAINER_NAME], capture_output=True, text=True, timeout=30)
+        return _create_kali_container()
+
     try:
         state = subprocess.run(
             ["docker", "inspect", KALI_CONTAINER_NAME, "--format", "{{.State.Running}}"],
@@ -206,24 +278,7 @@ def ensure_kali_container_ready() -> dict | None:
     except FileNotFoundError:
         return {"error": "docker is not installed or not on PATH"}
 
-    if state.returncode != 0:
-        # Container doesn't exist yet -- create it, long-lived (sleep infinity
-        # keeps it alive between docker exec calls; --rm would tear it down
-        # the moment any single exec exited).
-        run = subprocess.run(
-            [
-                "docker", "run", "-d", "--name", KALI_CONTAINER_NAME,
-                "--network", "bridge",
-                "--add-host", "host.docker.internal:host-gateway",
-                KALI_IMAGE, "sleep", "infinity",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if run.returncode != 0:
-            return {"error": f"Failed to start {KALI_CONTAINER_NAME}: {truncate(run.stderr)}"}
-    elif state.stdout.strip() != "true":
+    if state.stdout.strip() != "true":
         start = subprocess.run(
             ["docker", "start", KALI_CONTAINER_NAME], capture_output=True, text=True, timeout=30
         )
@@ -256,3 +311,37 @@ def run_in_kali_container(args: list[str], timeout: int) -> dict:
         "stdout": truncate(proc.stdout),
         "stderr": truncate(proc.stderr),
     }
+
+
+def write_file_in_kali_container(path: str, content: str) -> dict | None:
+    """Write `content` to `path` inside the long-lived Kali container, via
+    stdin piped through `docker exec -i ... tee` -- no shell, no quoting of
+    the content itself (it's passed as raw bytes through subprocess's
+    `input=`, not interpolated into a command string). Used by
+    categories/metasploit.py to get a resource script into the container
+    before running it (this container has no bind mount the way
+    execute_python's ephemeral containers do, so a file has to be written
+    in-place rather than mounted in).
+
+    Returns an error dict on failure, None on success.
+    """
+    ready_error = ensure_kali_container_ready()
+    if ready_error:
+        return ready_error
+
+    try:
+        proc = subprocess.run(
+            ["docker", "exec", "-i", KALI_CONTAINER_NAME, "tee", path],
+            input=content,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"Timed out writing {path} into {KALI_CONTAINER_NAME}"}
+    except FileNotFoundError:
+        return {"error": "docker is not installed or not on PATH"}
+
+    if proc.returncode != 0:
+        return {"error": f"Failed to write {path} into {KALI_CONTAINER_NAME}: {truncate(proc.stderr)}"}
+    return None

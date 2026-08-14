@@ -17,5 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gobuster \
     enum4linux-ng \
     exploitdb \
+    metasploit-framework \
     && gunzip -k /usr/share/wordlists/rockyou.txt.gz \
     && rm -rf /var/lib/apt/lists/*
+
+# No `msfdb init` -- msfconsole works fine database-less for scripted,
+# non-interactive use (categories/metasploit.py always drives it via
+# `-r <resource-script>`), and skipping it keeps the image build simpler.

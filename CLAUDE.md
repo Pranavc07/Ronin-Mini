@@ -106,6 +106,13 @@ subprocess per run. Tools are grouped into categories under
   third-party runtime dependency.
 - `network_exploit` → `nmap`, `nikto`, `sqlmap`, `hydra`, `gobuster`,
   `enum4linux`, `searchsploit` — Phase 2's Kali attack box tools (see below).
+- `metasploit_exploit` → `metasploit` — runs a real Metasploit exploit
+  module. `exploit_agent`-only, never `recon_agent` (see "Per-agent tool
+  allowlisting" below). The one deliberate exception to "fixed enum, no raw
+  passthrough": `module` is a free-text Metasploit module path, by explicit
+  choice — see `categories/metasploit.py`'s module docstring for the
+  reasoning and what's still enforced regardless (scope, injection guard,
+  `lport` range).
 
 `probe_variant` / `execute_python` each have their execution body extracted to a
 module-level `run_*` function so `replay_probe` reuses the identical scope-checked
@@ -131,7 +138,10 @@ The server exposes everything; each agent narrows what it sees via
   itself. Does NOT do the formal validation pass -- exploit_agent still owns that.
   (Originally scoped to HTTP/DNS-only; deliberately reconsidered -- see
   `docs/roadmap.md`'s Phase 2 section for why.)
-- **exploit_agent**: `{web_exploit, exploit_runtime, attack_reference, network_exploit}` — validates findings.
+- **exploit_agent**: `{web_exploit, exploit_runtime, attack_reference, network_exploit,
+  metasploit_exploit}` — validates findings. The only agent with `metasploit` access —
+  recon can *find* candidates (nmap/searchsploit) but never runs actual exploit
+  modules itself, by explicit design.
 - **verify_agent**: `{verify}` — ONLY `replay_probe`. Deliberately cannot reach
   recon/exploit tools; it can only reproduce recorded attempts, not invent new
   ones. Enforced at the schema level, not just by prompt.
@@ -213,6 +223,58 @@ uses the translated address. (Caught by the integration test: without this,
 `nmap localhost` would scan the Kali box itself and always report nothing
 open.)
 
+## Metasploit (metasploit_exploit, exploit_agent-only)
+
+`ronin-tools-mcp/categories/metasploit.py` — one tool, `metasploit`, runs a
+real Metasploit exploit module inside the same long-lived `ronin-kali-box`
+container (`metasploit-framework` added to `kali-tools.Dockerfile`, no
+`msfdb init` — database-less scripted use is fine for non-interactive runs).
+`exploit_agent`-only, never `recon_agent` — its own category
+(`metasploit_exploit`), separate from `network_exploit`, specifically so it
+can be added to one agent's allowlist without the other. This is a real
+jump in risk tier from every other tool here, **by explicit user choice**:
+
+- **`module` is free-text, not a fixed enum** — the one deliberate exception
+  to "fixed enum, no raw passthrough" that every other tool in this repo
+  follows. A curated-allowlist alternative was proposed and explicitly
+  declined. What's still enforced regardless: `scope.validate_host` on the
+  target (host allowlist is a hard boundary independent of module choice),
+  and a resource-script injection guard — `module`/`payload`/`options`/
+  `post_exploit_command` are rejected if they contain a newline, since
+  they're written into a line-based `.rc` file the console interprets one
+  command per line. This isn't about restricting *which* module runs, only
+  preventing a parameter value from smuggling in *extra* commands.
+- **Reverse-shell payloads are supported** (`payload`/`lhost`/`lport`), also
+  by explicit choice over a backdoor/bind-only-for-now alternative. This
+  needed real container networking changes: `ensure_kali_container_ready()`
+  now publishes a fixed port range (`executor.KALI_LPORT_RANGE`,
+  `44440-44450`) so a reverse listener inside the container is externally
+  reachable — `lport` is validated against this range before anything runs,
+  otherwise a listener would open that nothing could ever reach. Docker
+  can't add port publishing to an already-running container, so
+  `ensure_kali_container_ready()` detects an existing `ronin-kali-box`
+  missing these published ports and recreates it (remove + re-run) rather
+  than just starting it.
+- **LHOST is operator-supplied, not auto-detected** — for a reverse shell to
+  actually reach back from an external target (e.g. a Metasploitable VM on
+  a VirtualBox host-only network), `lhost` needs to be an IP the target can
+  route to. That's typically the Windows host's own IP on that network
+  adapter (e.g. `192.168.56.1`), not the container's internal bridge IP —
+  Docker Desktop on Windows publishes container ports to all host
+  interfaces by default, so a published port is reachable via that adapter
+  too. This is environment topology the operator supplies; the code can't
+  infer it.
+- The category is `require_approval: true`, same gating discipline as
+  everywhere else — that's the actual safety control here, not a curated
+  module list. Under `--hitl-mode auto` this tool runs unattended like
+  everything else gated; worth being aware of given the elevated
+  capability.
+
+No file-mount into the long-lived container (unlike `execute_python`'s
+ephemeral containers) — `executor.write_file_in_kali_container()` writes the
+generated resource script in via `docker exec -i ... tee`, stdin-piped, no
+shell, no quoting needed for the script content itself.
+
 ## Deliberate non-goals (do not add without being asked)
 
 No Kafka, no Postgres/database, no service framework, no message queue, no
@@ -243,9 +305,13 @@ Everything is authorized-testing-only; both apps exist to be broken. Scope
 `ANTHROPIC_API_KEY`, else skips), `test_network_exploit.py` (unit, mocked
 `run_in_kali_container`, no Docker needed) + `test_network_exploit_integration.py`
 (real Docker + the real `ronin-kali-box` container against DVWA — first run
-builds the ~4GB image). NOTE: `test_execute_python.py` currently *errors*
-(not skips) when the Docker daemon is down — its guard only checks the
-binary exists. Harmless; a known 2-line fix if it annoys you.
+builds the ~4.3GB image incl. metasploit-framework), `test_metasploit.py`
+(unit, mocked, resource-script construction + injection guard + lport range)
++ `test_metasploit_integration.py` (real Docker, confirms
+metasploit-framework is installed and a real module run completes without
+hanging). NOTE: `test_execute_python.py` currently *errors* (not skips)
+when the Docker daemon is down — its guard only checks the binary exists.
+Harmless; a known 2-line fix if it annoys you.
 
 ## Current state
 
@@ -265,5 +331,10 @@ binary exists. Harmless; a known 2-line fix if it annoys you.
   no full agent pipeline run could ever reach these tools) is now closed:
   recon_agent has real agent-level access to all 7 tools, plus two new
   finding types (`known_vulnerable_service`, `weak_credentials`) with full
-  skills pairing them to `searchsploit`/`hydra`. Live pipeline check against
-  real Metasploitable pending. See `docs/roadmap.md` for the full phase plan.
+  skills pairing them to `searchsploit`/`hydra`. `metasploit` (its own
+  `metasploit_exploit` category, exploit_agent-only) added on top for
+  running real exploit modules -- free-text module + reverse-shell payload
+  support by explicit user choice, the one deliberate exception to this
+  repo's fixed-enum-everywhere discipline. Live pipeline check against real
+  Metasploitable pending for both the recon-agent-level-access fix and
+  `metasploit`. See `docs/roadmap.md` for the full phase plan.

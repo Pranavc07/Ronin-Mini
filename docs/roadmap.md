@@ -148,16 +148,21 @@ tools have grown provider-specific assumptions):
   scope validation) needed since these tools run *inside* the Kali
   container — caught by the integration test, not anticipated in the
   original design.
-- **Known gap, surfaced by the Metasploitable live check, not yet fixed**:
-  `recon_agent` has no `network_exploit` access and the 14-word finding-type
-  vocabulary is entirely web-vuln-class — there is currently no path for a
-  full `recon → exploit → verify` pipeline run to ever hand `exploit_agent`
-  a finding that would make it reach for these tools. All 7 are real and
-  tool-level tested, but not yet reachable through the actual agent
-  pipeline end-to-end. Needs its own scoped pass (network-layer finding
-  types + either narrow nmap-discovery access for recon, or another way to
-  seed network-layer findings) before this phase is genuinely
-  agent-usable, not just tool-usable.
+- **`metasploit` added on top** (2026-08-15): a real Metasploit exploit
+  module runner, its own `metasploit_exploit` category, `exploit_agent`-only
+  (never `recon_agent` — explicit direction, unlike the other 7 tools which
+  both agents share). The one deliberate exception to this repo's
+  fixed-enum-everywhere discipline: `module` is a free-text Metasploit
+  module path, and reverse-shell payloads (`payload`/`lhost`/`lport`) are
+  supported — both by explicit user choice over narrower alternatives
+  (a curated module allowlist; backdoor/bind-only payloads) proposed and
+  declined. What's still enforced regardless: `scope.validate_host` on the
+  target, a resource-script injection guard (no newlines in
+  module/payload/options/post_exploit_command), and `lport` validated
+  against a fixed published range (`executor.KALI_LPORT_RANGE`,
+  `44440-44450`) so a reverse listener is actually reachable. See
+  `CLAUDE.md`'s Metasploit section for the full design, including the
+  LHOST networking caveat (operator-supplied, not auto-detected).
 
 ## Phase 3 — MongoDB (replaces findings.json)
 - Skip SQLite as an intermediate step — you're running a DB server eventually regardless (Redis + dashboard both assume one), and Mongo's flexible schema fits the genuinely heterogeneous tool output you're about to ingest (nmap XML, sqlmap output, Burp results all look structurally different).

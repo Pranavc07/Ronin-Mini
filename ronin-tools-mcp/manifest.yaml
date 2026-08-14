@@ -1,6 +1,6 @@
 # Registry of every tool the Ronin MCP tool server exposes.
 #
-# category: recon | web_exploit | network_exploit | fileops | verify | attack_reference
+# category: recon | web_exploit | network_exploit | fileops | verify | attack_reference | metasploit_exploit
 # timeout_seconds bounds a single tool call server-side (executor.py enforces it).
 # This file is the single source of truth for: server-side per-tool timeouts,
 # client-side category-based tool allowlisting, and each category's HITL
@@ -14,6 +14,7 @@ categories:
   exploit_runtime: {require_approval: true}  # execute_python
   verify: {require_approval: true}           # replay_probe
   network_exploit: {require_approval: true}  # reserved for Phase 2's Kali tools -- gated by default from day one
+  metasploit_exploit: {require_approval: true}  # exploit_agent-only, never recon_agent -- see CLAUDE.md
 
 tools:
   http_request:
@@ -125,3 +126,12 @@ tools:
       Search the local, offline exploit-db database for known exploits
       matching a service name/version. No network access.
     timeout_seconds: 30
+
+  metasploit:
+    category: metasploit_exploit
+    description: >
+      Run a Metasploit exploit module against a target. Free-text module
+      path (e.g. "exploit/unix/ftp/vsftpd_234_backdoor"), optional
+      payload/lhost/lport for reverse payloads (lport must be in the
+      published range). exploit_agent-only.
+    timeout_seconds: 300

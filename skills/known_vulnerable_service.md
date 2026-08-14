@@ -21,10 +21,17 @@ cite the exact service+version string that triggered this.
 2. **A searchsploit hit alone is not confirmed exploitation.** It identifies
    real exposure (a matching CVE for the exact running version), but the
    verdict distinction matters:
-   - If you can actually trigger the documented behavior (e.g. a known
-     backdoor command sequence, confirmable via `execute_python` using
-     `ronin_target.request`/raw socket access) and observe the expected
-     effect (shell access, a distinguishing response), that's `exploited`.
+   - If a matching Metasploit module exists for the exploit searchsploit
+     found, prefer `metasploit` to actually run it over hand-rolling the
+     exploit in `execute_python` -- a matched tool call is faster and more
+     reliable than reimplementing a known exploit's protocol behavior from
+     scratch. A real session opening (`"Command shell session N opened"` /
+     `"Meterpreter session N opened"` in the returned output) is strong,
+     concrete evidence -- that's `exploited`.
+   - If no suitable module exists, `execute_python` (via
+     `ronin_target.request`/raw socket access) is the fallback for
+     reproducing a simple documented exploit behavior by hand -- still
+     `exploited` if you observe the expected effect.
    - If searchsploit finds a real match but you have no way to actually
      trigger or confirm it with the tools available, the honest verdict is
      `dead-end` -- state clearly in your evidence that a known exploit
@@ -49,7 +56,12 @@ cite the exact service+version string that triggered this.
 
 ## Tooling
 
-- `searchsploit` is the primary tool -- offline, fast, no network access.
+- `searchsploit` finds whether a known exploit exists -- offline, fast, no
+  network access. Always the first step.
+- `metasploit` is the preferred way to actually run a known exploit when a
+  matching module exists (e.g. `exploit/unix/ftp/vsftpd_234_backdoor` for
+  the vsftpd 2.3.4 backdoor). Judge the outcome from the returned
+  msfconsole output, not a pre-judged verdict from the tool itself.
 - `execute_python` (via `ronin_target.request` or raw socket access for
-  non-HTTP protocols) is the fallback for actually attempting to trigger a
-  documented exploit behavior, when one is simple enough to reproduce.
+  non-HTTP protocols) is the fallback for attempting to trigger a
+  documented exploit behavior by hand, when no Metasploit module fits.
