@@ -5,6 +5,32 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-14 — Closed the recon->network_exploit reachability gap
+- Reconsidered the Phase 2 boundary decision after the user pushed back:
+  `recon_agent.ALLOWED_CATEGORIES` now includes `network_exploit` (real
+  agent-level tool access, same mechanism exploit_agent already had) --
+  recon decides itself which of the 7 Kali tools fit the target's scope,
+  real `tool_use` turns, not host-code-triggered. Superseded the original
+  "recon stays HTTP/DNS-only" note in `docs/roadmap.md` explicitly rather
+  than leaving it stale; HITL gating (`require_approval` on
+  `network_exploit`) is what actually keeps this safe, unchanged.
+- Two new finding types (`known_vulnerable_service` -> `searchsploit`,
+  `weak_credentials` -> `hydra`), both `status: full` skills with real
+  CWE/ATT&CK tags verified against `attack_enterprise_slim.json` (T1210
+  Lateral Movement, T1110 Credential Access -- first genuine ATT&CK
+  differentiation from T1190 since Phase 1.5 promised it would happen).
+  `agents/recon.md` and `agents/exploit.md` updated with tool guidance.
+- 4 new wiring tests + full regression suite pass (77 tests; Docker Desktop
+  was down for this run so `test_execute_python.py`/the 3 Kali integration
+  tests didn't execute -- pre-existing documented behavior, not a
+  regression).
+- NEXT: live check handed to user -- run `run.py` against real
+  Metasploitable (192.168.56.5) and confirm recon_agent itself calls
+  nmap/enum4linux/etc. (visible in its own transcript) and produces
+  known_vulnerable_service/weak_credentials findings that exploit_agent
+  then validates. This is what actually closes the gap end-to-end.
+  Everything here is uncommitted on `main`.
+
 ## 2026-08-13 — Phase 2 (Kali attack box) built and integration-tested
 - New `ronin-tools-mcp/docker/kali-tools.Dockerfile` (kalilinux/kali-rolling
   + nmap/nikto/sqlmap/hydra/wordlists/seclists/gobuster/enum4linux-ng/

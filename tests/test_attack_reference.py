@@ -70,10 +70,10 @@ def test_load_skill_missing_type_returns_none():
     assert agent_core.load_skill("not_a_real_finding_type") is None
 
 
-def test_load_skill_all_fourteen_have_status():
+def test_load_skill_all_have_status():
     skills_dir = os.path.join(_REPO_ROOT, "skills")
     finding_types = [f[:-3] for f in os.listdir(skills_dir) if f.endswith(".md")]
-    assert len(finding_types) == 14
+    assert len(finding_types) == 16  # 14 web-vuln classes + known_vulnerable_service + weak_credentials
     for finding_type in finding_types:
         doc = agent_core.load_skill(finding_type)
         assert doc is not None, finding_type

@@ -125,8 +125,13 @@ asks for.
 The server exposes everything; each agent narrows what it sees via
 `filter_tools_by_category` against `manifest.yaml`:
 
-- **recon_agent**: `{recon, fileops}` — explores, does NOT exploit.
-- **exploit_agent**: `{web_exploit, exploit_runtime, attack_reference}` — validates findings.
+- **recon_agent**: `{recon, fileops, network_exploit}` — explores using the full
+  recon/network toolset (http_request/dns_lookup plus nmap/nikto/sqlmap/hydra/
+  gobuster/enum4linux/searchsploit), decides which tools fit the target's scope
+  itself. Does NOT do the formal validation pass -- exploit_agent still owns that.
+  (Originally scoped to HTTP/DNS-only; deliberately reconsidered -- see
+  `docs/roadmap.md`'s Phase 2 section for why.)
+- **exploit_agent**: `{web_exploit, exploit_runtime, attack_reference, network_exploit}` — validates findings.
 - **verify_agent**: `{verify}` — ONLY `replay_probe`. Deliberately cannot reach
   recon/exploit tools; it can only reproduce recorded attempts, not invent new
   ones. Enforced at the schema level, not just by prompt.
@@ -255,9 +260,10 @@ binary exists. Harmless; a known 2-line fix if it annoys you.
   enum4linux/searchsploit) implemented and live-tested against DVWA (Docker
   integration) and a real Metasploitable box (nmap fingerprinted vsftpd
   2.3.4/Samba, enum4linux-ng pulled real SMB shares, searchsploit found the
-  real CVE-2011-2523 backdoor off nmap's own output). KNOWN GAP: this
-  testing was tool-level only -- recon_agent has no network_exploit access
-  and the finding-type vocabulary is entirely web-vuln-class, so there is
-  currently no path for a full agent pipeline run to ever reach these tools
-  on its own. See `docs/roadmap.md` for the full phase plan and this gap's
-  writeup.
+  real CVE-2011-2523 backdoor off nmap's own output). The tool-level-only
+  gap that testing surfaced (recon_agent had no network_exploit access, so
+  no full agent pipeline run could ever reach these tools) is now closed:
+  recon_agent has real agent-level access to all 7 tools, plus two new
+  finding types (`known_vulnerable_service`, `weak_credentials`) with full
+  skills pairing them to `searchsploit`/`hydra`. Live pipeline check against
+  real Metasploitable pending. See `docs/roadmap.md` for the full phase plan.

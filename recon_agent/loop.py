@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 import agent_core  # noqa: E402
 import models  # noqa: E402
 
-ALLOWED_CATEGORIES = {"recon", "fileops"}
+ALLOWED_CATEGORIES = {"recon", "fileops", "network_exploit"}
 
 
 def _now_iso() -> str:

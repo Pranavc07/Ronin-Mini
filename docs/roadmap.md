@@ -130,7 +130,20 @@ tools have grown provider-specific assumptions):
   `network_exploit` category (`require_approval: true`, inherits the
   Phase 0 `hitl_mode` system like any other gated category — no
   special-casing).
-- `network_exploit` category → exploit_agent's allowlist only. Recon stays HTTP/DNS-only; active scanning is a different risk tier from passive requests, keep that boundary.
+- **Reconsidered after the initial live test surfaced a real gap** (2026-08-13):
+  `network_exploit` was originally exploit_agent-only, with recon deliberately kept
+  HTTP/DNS-only ("active scanning is a different risk tier, keep that boundary").
+  That meant no full `recon → exploit → verify` run could ever produce a finding
+  that reached these tools at all. Decision: recon_agent now has real agent-level
+  access to the full `network_exploit` toolset too (`ALLOWED_CATEGORIES` includes
+  it, same mechanism exploit_agent already used) — it decides which recon tools fit
+  the target's scope itself, real `tool_use` turns, not host-code-triggered. The
+  safety control was never "which agent can reach the category" — it's
+  `require_approval: true` on `network_exploit` in `manifest.yaml`, which still
+  gates every call from either agent under `--hitl-mode manual`/`plan`. Two new
+  finding types (`known_vulnerable_service`, `weak_credentials`, full skills,
+  genuine ATT&CK differentiation from T1190 via T1210/T1110) give recon's
+  network-layer discoveries somewhere to go.
 - Loopback-host translation (`localhost` → `host.docker.internal` after
   scope validation) needed since these tools run *inside* the Kali
   container — caught by the integration test, not anticipated in the
