@@ -163,7 +163,23 @@ code, not via the model.
 - verify → each `exploited`: `verifying → verified | false_positive |
   verify_incomplete`, appends to `verify_attempts`. `replay_probe` reads the
   winning attempt from findings.json (server gets `--findings-path`) and replays
-  its recorded tool calls (all of them, capped at 12).
+  its recorded tool calls (all of them, capped at 12). `categories/verify.py`'s
+  `REPLAYABLE_TOOLS` must include every tool `exploit_agent` can reach
+  (`test_verify.py::test_every_exploit_agent_tool_is_replayable` enforces this) —
+  a winning attempt using a tool replay doesn't know how to run finds zero
+  replayable calls, and verify concludes `false_positive` on what may be a
+  completely real exploit. This happened for real: network_exploit's 7 tools
+  and `metasploit` were added to exploit_agent without this file being
+  updated, and a live run against Metasploitable mislabeled 3 genuine
+  Metasploit-confirmed exploits (incl. a root shell) as false positives.
+  **Separately** (not the same issue, not fixed by the above): replaying a
+  *live exploit* a second time can legitimately fail for reasons outside the
+  code's control — some exploits are one-shot on the target (e.g. the vsftpd
+  2.3.4 backdoor doesn't reliably re-trigger without a service restart), and
+  reverse-payload replay depends on the same LHOST/network topology caveat as
+  the original run. A `false_positive` from a genuinely-failed live replay is
+  a different thing from a `false_positive` because nothing was replayed at
+  all — the fix above only addresses the latter.
 
 Schema: `{"findings": [{id, type, target, evidence, status, discovered_by,
 exploit_attempts:[...], verify_attempts:[...]}]}`.

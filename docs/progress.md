@@ -5,6 +5,42 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-15 — Live Metasploitable run + fixed a real verify bug it found
+- Ran the full `recon -> exploit -> verify` pipeline against real
+  Metasploitable (192.168.56.5) with `--objective` explicitly asking for
+  exploitation, not just enumeration. Results: recon made 40 real tool
+  calls (nmap/enum4linux/etc, its own tool_use turns) and produced 11
+  candidate findings; exploit_agent processed all 11, reaching real
+  Metasploit-confirmed exploits including a root shell via
+  `exploit/multi/samba/usermap_script` (CVE-2007-2447) and a real backdoor
+  session via `exploit/unix/ftp/vsftpd_234_backdoor` (CVE-2011-2523) --
+  full proof the recon-agent-access fix and `metasploit` tool both work
+  end-to-end through the real agent pipeline, not just tool-level.
+- Found and fixed a real bug this run surfaced: `categories/verify.py`'s
+  `replay_probe` only ever replayed `probe_variant`/`execute_python` calls
+  -- a filter that predates network_exploit/metasploit. 3 genuinely
+  exploited findings (the two CVEs above + a Ghostcat/CVE-2020-1938 file
+  read) got marked `false_positive` purely because replay found zero calls
+  it knew how to run, not because the exploits weren't real. Fixed by
+  extending `REPLAYABLE_TOOLS`/`_replay_call` to cover all 7 network_exploit
+  tools + `metasploit` + `lookup_attack_technique`, with a regression-guard
+  test (`test_every_exploit_agent_tool_is_replayable`) that diffs
+  exploit_agent's actual toolset against what verify can replay, so this
+  can't silently drift again when a tool is added.
+- Confirmed the fix works mechanically (replaying f2/f3's real metasploit
+  calls now genuinely re-attempts them, where before it found nothing to
+  run) -- but also surfaced a *separate*, not-a-bug nuance while doing so:
+  live-exploit replay can legitimately fail a second time for reasons
+  outside the code (vsftpd's backdoor is one-shot on the target; LHOST for
+  reverse payloads is host network topology, not a container-internal IP).
+  Documented both distinctly in CLAUDE.md so they don't get conflated later.
+- 104 tests pass (7 new in test_verify.py). Committed.
+- NEXT: no committed next step. The `false_positive`s from this specific
+  run stay as historical record in findings_metasploitable.json (gitignored,
+  not committed) -- a fresh pipeline run would now verify them correctly
+  for the repeatable exploits (Samba/Ghostcat), modulo the live-replay
+  caveat above.
+
 ## 2026-08-15 — Added metasploit (exploit_agent-only)
 - New `metasploit_exploit` category (separate from `network_exploit` so it
   can go to `exploit_agent` only, not `recon_agent` -- explicit user
