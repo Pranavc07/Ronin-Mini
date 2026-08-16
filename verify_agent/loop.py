@@ -22,6 +22,7 @@ from mcp.client.stdio import stdio_client
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 import agent_core  # noqa: E402
 import models  # noqa: E402
+from models import sum_usage  # noqa: E402
 
 ALLOWED_CATEGORIES = {"verify"}
 
@@ -111,6 +112,7 @@ async def _process_one_finding(
         "timestamp": _now_iso(),
         "tool_call_count": result["tool_call_count"],
         "stop_reason": result["stop_reason"],
+        "usage": result["usage"],
         "transcript": result["transcript"],
         "verdict": verdict,
     }
@@ -141,6 +143,7 @@ async def run_verify_agent(
     server_params = agent_core.mcp_server_params(scope_dir, allowed_hosts, findings_path=findings_path)
 
     processed = 0
+    attempt_usages: list[dict] = []
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -174,9 +177,11 @@ async def run_verify_agent(
                 finding["status"] = outcome_status
                 _save_findings(findings_path, findings)
                 processed += 1
+                attempt_usages.append(attempt["usage"])
 
     return {
         "processed": processed,
         "total_findings": len(findings),
         "findings_path": findings_path,
+        "usage": sum_usage(*attempt_usages),
     }

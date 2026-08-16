@@ -36,10 +36,40 @@ class Turn:
 
 
 @dataclass
+class Usage:
+    """Token usage for one send_messages() call. Cache fields are 0 for
+    adapters/providers that don't support prompt caching -- always present so
+    callers can sum Usage objects uniformly regardless of provider.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+    def __add__(self, other: "Usage") -> "Usage":
+        return Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
+            cache_read_input_tokens=self.cache_read_input_tokens + other.cache_read_input_tokens,
+        )
+
+    def as_dict(self) -> dict:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_creation_input_tokens": self.cache_creation_input_tokens,
+            "cache_read_input_tokens": self.cache_read_input_tokens,
+        }
+
+
+@dataclass
 class ModelResponse:
     text: str
     tool_calls: list[ToolCall]
     stop_reason: str
+    usage: Usage = field(default_factory=Usage)
 
 
 class ModelAdapter(ABC):

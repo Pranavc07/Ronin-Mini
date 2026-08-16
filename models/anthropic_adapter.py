@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import anthropic
 
-from .base import ModelAdapter, ModelResponse, ToolCall, Turn
+from .base import ModelAdapter, ModelResponse, ToolCall, Turn, Usage
 
 
 class AnthropicAdapter(ModelAdapter):
@@ -66,4 +66,16 @@ class AnthropicAdapter(ModelAdapter):
             for block in response.content
             if block.type == "tool_use"
         ]
-        return ModelResponse(text=text, tool_calls=tool_calls, stop_reason=response.stop_reason or "end_turn")
+        # getattr-guarded: test doubles for `response` (e.g. a bare SimpleNamespace
+        # in test_agent_core.py) may not set `.usage` at all -- default to zero
+        # usage rather than raising, same tolerance as stop_reason above.
+        raw_usage = getattr(response, "usage", None)
+        usage = Usage(
+            input_tokens=getattr(raw_usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(raw_usage, "output_tokens", 0) or 0,
+            cache_creation_input_tokens=getattr(raw_usage, "cache_creation_input_tokens", 0) or 0,
+            cache_read_input_tokens=getattr(raw_usage, "cache_read_input_tokens", 0) or 0,
+        )
+        return ModelResponse(
+            text=text, tool_calls=tool_calls, stop_reason=response.stop_reason or "end_turn", usage=usage
+        )

@@ -21,7 +21,7 @@ import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client  # noqa: F401  (re-exported for callers)
 
-from models import ModelAdapter, ToolResult, Turn  # noqa: E402
+from models import ModelAdapter, ToolResult, Turn, Usage  # noqa: E402
 
 TOOL_TIMEOUT_SECONDS = 15
 
@@ -283,8 +283,11 @@ async def run_tool_loop(
         this run makes; that decision governs every gated call for the rest
         of this run_tool_loop invocation (one finding, for exploit/verify).
 
-    Returns {transcript, extracted_blocks, tool_call_count, stop_reason}.
-    extracted_blocks is populated only if extract_markers is given.
+    Returns {transcript, extracted_blocks, tool_call_count, stop_reason, usage}.
+    extracted_blocks is populated only if extract_markers is given. usage is
+    the summed token usage (input/output/cache) across every model call this
+    invocation made -- see models.Usage / models.estimate_cost_usd to turn it
+    into a dollar figure.
     """
     assert hitl_mode in HITL_MODES, f"unknown hitl_mode {hitl_mode!r}, expected one of {HITL_MODES}"
 
@@ -294,6 +297,7 @@ async def run_tool_loop(
     start_time = time.monotonic()
     tool_call_count = 0
     stop_reason_final = "unknown"
+    total_usage = Usage()
     plan_decision: bool | None = None  # only used when hitl_mode == "plan"
     gated_tool_names = {t["name"] for t in tool_defs if (manifest.get(t["name"]) or None) and manifest[t["name"]].require_approval}
 
@@ -307,6 +311,7 @@ async def run_tool_loop(
             break
 
         response = await model_adapter.send_messages(system_prompt, messages, tool_defs, max_tokens)
+        total_usage = total_usage + response.usage
 
         assistant_text = response.text
         if extract_markers:
@@ -374,4 +379,5 @@ async def run_tool_loop(
         "extracted_blocks": extracted_blocks,
         "tool_call_count": tool_call_count,
         "stop_reason": stop_reason_final,
+        "usage": total_usage.as_dict(),
     }

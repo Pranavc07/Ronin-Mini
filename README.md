@@ -72,6 +72,12 @@ model-agnostic adapter (`models/`), never to a provider SDK directly.
 - **`findings.json`** — the state file three-agent mode hands off through:
   `new → claimed → exploited | dead-end | incomplete → verifying → verified
   | false_positive | verify_incomplete`.
+- **Token usage + cost** — every model call's token usage is captured on
+  `ModelResponse` and summed across a run by `agent_core.run_tool_loop`.
+  `main.py`/`run.py` print token counts and an estimated dollar cost after
+  each stage, via a static pricing table (`models/pricing.py`) — treat the
+  dollar figure as an approximate, same-session ballpark, not authoritative
+  billing; check `console.anthropic.com` for real spend.
 
 ## Setup
 

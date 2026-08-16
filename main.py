@@ -18,6 +18,7 @@ import sys
 from datetime import datetime, timezone
 
 from loop import run_agent
+from models import estimate_cost_usd
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
@@ -111,9 +112,16 @@ def main() -> int:
         json.dump(result, f, indent=2, default=str)
 
     meta = result["metadata"]
+    usage = meta["usage"]
+    cost = estimate_cost_usd(args.model, usage)
     print(f"\n[+] Stopped: {meta['stop_reason']}")
     print(f"[+] Tool calls made: {meta['tool_call_count']}")
     print(f"[+] Findings: {len(result['findings'])}")
+    print(
+        f"[+] Tokens: input={usage['input_tokens']} output={usage['output_tokens']} "
+        f"cache_write={usage['cache_creation_input_tokens']} cache_read={usage['cache_read_input_tokens']}"
+    )
+    print(f"[+] Estimated cost: ${cost:.4f} (approximate -- verify against console.anthropic.com billing)")
     print(f"[+] Transcript written to: {output_path}")
 
     return 0

@@ -14,10 +14,18 @@ import os
 import sys
 
 from exploit_agent.loop import run_exploit_agent
+from models import estimate_cost_usd, sum_usage
 from recon_agent.loop import run_recon_agent
 from verify_agent.loop import run_verify_agent
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+
+def _fmt_usage(usage: dict) -> str:
+    return (
+        f"input={usage['input_tokens']} output={usage['output_tokens']} "
+        f"cache_write={usage['cache_creation_input_tokens']} cache_read={usage['cache_read_input_tokens']}"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,6 +92,8 @@ async def main_async(args: argparse.Namespace) -> int:
         f"[recon] stopped: {meta['stop_reason']}, {meta['tool_call_count']} tool calls, "
         f"{recon_result['findings_count']} candidate findings -> {recon_result['findings_path']}"
     )
+    recon_cost = estimate_cost_usd(args.model, meta["usage"])
+    print(f"[recon] tokens: {_fmt_usage(meta['usage'])} (~${recon_cost:.4f})")
 
     if recon_result["findings_count"] == 0:
         print("[exploit] no findings to process, skipping exploit_agent")
@@ -101,6 +111,8 @@ async def main_async(args: argparse.Namespace) -> int:
         per_finding_max_minutes=args.exploit_per_finding_max_minutes,
     )
     print(f"[exploit] processed {exploit_result['processed']}/{exploit_result['total_findings']} findings")
+    exploit_cost = estimate_cost_usd(args.model, exploit_result["usage"])
+    print(f"[exploit] tokens: {_fmt_usage(exploit_result['usage'])} (~${exploit_cost:.4f})")
 
     print(f"[verify] independently re-checking exploited findings from {args.findings_path}")
     verify_result = await run_verify_agent(
@@ -114,7 +126,14 @@ async def main_async(args: argparse.Namespace) -> int:
         per_finding_max_minutes=args.verify_per_finding_max_minutes,
     )
     print(f"[verify] verified {verify_result['processed']} exploited finding(s)")
+    verify_cost = estimate_cost_usd(args.model, verify_result["usage"])
+    print(f"[verify] tokens: {_fmt_usage(verify_result['usage'])} (~${verify_cost:.4f})")
     print(f"[verify] final results in {verify_result['findings_path']}")
+
+    total_usage = sum_usage(meta["usage"], exploit_result["usage"], verify_result["usage"])
+    total_cost = recon_cost + exploit_cost + verify_cost
+    print(f"\n[total] tokens: {_fmt_usage(total_usage)}")
+    print(f"[total] estimated cost: ${total_cost:.4f} (model={args.model}; approximate -- verify against console.anthropic.com billing)")
     return 0
 
 

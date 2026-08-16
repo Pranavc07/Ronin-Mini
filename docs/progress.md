@@ -5,6 +5,37 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-16 — Token usage + cost tracking
+- Added after a live Metasploitable full-pwn run hit `credit balance too low`
+  mid-exploit-stage, and there was no way to answer "how much has this
+  actually cost" beyond guessing from tool-call counts -- the harness never
+  tracked tokens anywhere.
+- `models/base.py`'s `ModelResponse` now carries a `usage: Usage` field
+  (input/output/cache tokens); `AnthropicAdapter` populates it from the real
+  API response, getattr-guarded so mocked responses default to zero instead
+  of raising. `agent_core.run_tool_loop` sums usage across every model call
+  in one invocation and returns it; each `run_*_agent()` threads it through
+  (recon: run-level; exploit/verify: per-finding on each attempt record,
+  plus a run-level total via new `models.sum_usage`). `models/pricing.py`
+  converts a usage dict to a dollar estimate via a static, maintained
+  pricing table (Sonnet-tier fallback for unrecognized model ids) --
+  explicitly not a live lookup, Anthropic doesn't expose one. `run.py`
+  prints per-stage + total tokens/cost; `main.py` prints the same for
+  single-agent runs. Every cost line is labeled approximate and points at
+  `console.anthropic.com` as the real source of truth.
+- 11 new unit tests (`tests/test_usage_tracking.py`): Usage arithmetic,
+  pricing table lookup + unknown-model fallback + missing-key defaults,
+  adapter usage extraction (present and absent), run_tool_loop accumulation
+  across single and multiple model calls. Full suite still passes (109/110;
+  the one failure, `test_mcp_server_full_flow`, is pre-existing and
+  unrelated -- a stale expected-tool-name set that predates the Kali/
+  Metasploit tools, flagged separately, not fixed here).
+- NEXT: no committed next step. The interrupted Metasploitable full-pwn run
+  (54 findings, 12 processed before the credit error) is still sitting in
+  `findings_metasploitable_fullpwn.json`, gitignored -- resume once credits
+  are topped up. `run.py` has no resume-from-partial-file support yet
+  (reruns recon from scratch), worth a look if this comes up again.
+
 ## 2026-08-15 — Live Metasploitable run + fixed a real verify bug it found
 - Ran the full `recon -> exploit -> verify` pipeline against real
   Metasploitable (192.168.56.5) with `--objective` explicitly asking for

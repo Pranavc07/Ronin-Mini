@@ -122,6 +122,7 @@ async def run_agent(
             "ended_at": ended_at,
             "tool_call_count": result["tool_call_count"],
             "stop_reason": result["stop_reason"],
+            "usage": result["usage"],
         },
         "transcript": result["transcript"],
         "findings": findings,

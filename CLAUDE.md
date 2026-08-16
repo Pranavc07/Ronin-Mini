@@ -35,6 +35,32 @@ flag (`main.py`, `run.py`). Adding a second provider is a new adapter file +
 one more branch in `build_adapter` — no router, no per-turn model
 selection, no rewrite of `agent_core.py` or any agent loop.
 
+## Token usage + cost tracking
+
+`ModelResponse` carries a `usage: Usage` field (`input_tokens`,
+`output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` —
+`models/base.py`). `AnthropicAdapter.send_messages` populates it from the
+real API response's `.usage` (getattr-guarded, so test doubles without a
+`.usage` attribute default to zero instead of raising).
+`agent_core.run_tool_loop` sums `Usage` across every model call it makes
+within one invocation and returns it as `result["usage"]` (a plain dict, not
+the dataclass — the boundary out of agent_core.py is dicts, same as
+everything else it returns). Each `run_*_agent()` threads that through:
+recon puts it in `metadata["usage"]` (one `run_tool_loop` call per recon
+run); exploit/verify record `usage` per-finding on each `exploit_attempts`/
+`verify_attempts` entry (mirrors `tool_call_count`, already there) and also
+return a `run`-level total (`models.sum_usage(*per_finding_usages)`).
+`models/pricing.py`'s `estimate_cost_usd(model, usage_dict)` converts a
+usage dict to a dollar figure via a **static, maintained pricing table** —
+not a live lookup, since Anthropic doesn't expose a pricing API — with a
+Sonnet-tier fallback for any model id not in the table. `run.py` prints
+per-stage (`[recon]`/`[exploit]`/`[verify]`) and total token counts + cost
+after each stage; `main.py` prints the same for the single-agent loop. Every
+printed cost line is explicitly labeled approximate and points to
+`console.anthropic.com`'s billing dashboard as the authoritative source —
+this exists to give a same-session ballpark, not to replace real billing
+data.
+
 ## HITL approval gate — three modes, `hitl_mode`, default `auto`
 
 Gated tools (per `manifest.yaml`'s `categories:` block, resolved onto

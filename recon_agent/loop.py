@@ -110,6 +110,7 @@ async def run_recon_agent(
             "model": model,
             "tool_call_count": result["tool_call_count"],
             "stop_reason": result["stop_reason"],
+            "usage": result["usage"],
         },
         "transcript": result["transcript"],
         "findings_path": findings_path,
