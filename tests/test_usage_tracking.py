@@ -66,6 +66,12 @@ def test_estimate_cost_usd_missing_keys_default_to_zero():
     assert cost == 0.0
 
 
+def test_estimate_cost_usd_glm_free_tier_is_genuinely_zero():
+    usage = {"input_tokens": 5_000_000, "output_tokens": 5_000_000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    cost = estimate_cost_usd("z-ai/glm-5.2:free", usage)
+    assert cost == 0.0
+
+
 def test_sum_usage_across_multiple_dicts():
     u1 = {"input_tokens": 10, "output_tokens": 1, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
     u2 = {"input_tokens": 20, "output_tokens": 2, "cache_creation_input_tokens": 3, "cache_read_input_tokens": 4}

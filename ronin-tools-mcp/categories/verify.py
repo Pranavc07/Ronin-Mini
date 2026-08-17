@@ -79,6 +79,38 @@ _MANIFEST = load_manifest()
 REPLAYABLE_TOOLS = {name for name, meta in _MANIFEST.items() if meta.replayable in ("true", "partial")}
 
 
+def _coerce_dict(value):
+    """A recorded call's dict-typed argument occasionally comes back as a
+    JSON-encoded string instead of an actual object -- observed with
+    non-Anthropic models (e.g. Qwen3.6 Plus via OpenRouter) that don't
+    always emit correctly-typed nested tool-call arguments matching the
+    declared JSON schema, unlike Claude's native tool use. The ORIGINAL
+    exploit_agent call likely succeeded anyway because the MCP server layer
+    does its own type coercion before the registered tool function runs;
+    replay bypasses that layer entirely (calling the raw run_* function
+    directly), so do the same coercion here rather than crashing on a
+    stringified dict during replay.
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        return parsed if isinstance(parsed, dict) else value
+    return value
+
+
+def _coerce_int(value):
+    """Same problem as _coerce_dict, for int-typed arguments recorded as a
+    numeric string (e.g. metasploit's lport/port)."""
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    return value
+
+
 def _replay_call(scope, executor, timeouts: dict, tool: str, tool_input: dict):
     """Dispatch a single replay. Only ever called for tool in REPLAYABLE_TOOLS
     (run_replay_probe below routes replayable: "false" tools to the explicit
@@ -94,10 +126,10 @@ def _replay_call(scope, executor, timeouts: dict, tool: str, tool_input: dict):
             timeouts.get("probe_variant", DEFAULT_TIMEOUT_SECONDS),
             tool_input.get("method", "GET"),
             tool_input.get("url", ""),
-            tool_input.get("baseline_headers"),
-            tool_input.get("variant_headers"),
-            tool_input.get("baseline_params"),
-            tool_input.get("variant_params"),
+            _coerce_dict(tool_input.get("baseline_headers")),
+            _coerce_dict(tool_input.get("variant_headers")),
+            _coerce_dict(tool_input.get("baseline_params")),
+            _coerce_dict(tool_input.get("variant_params")),
             tool_input.get("body"),
         )
     if tool == "execute_python":
@@ -163,11 +195,11 @@ def _replay_call(scope, executor, timeouts: dict, tool: str, tool_input: dict):
             timeouts.get("metasploit", DEFAULT_TIMEOUT_SECONDS),
             tool_input.get("module", ""),
             tool_input.get("target", ""),
-            tool_input.get("port"),
+            _coerce_int(tool_input.get("port")),
             tool_input.get("payload"),
             tool_input.get("lhost"),
-            tool_input.get("lport"),
-            tool_input.get("options"),
+            _coerce_int(tool_input.get("lport")),
+            _coerce_dict(tool_input.get("options")),
             tool_input.get("post_exploit_command"),
         )
     if tool == "lookup_attack_technique":

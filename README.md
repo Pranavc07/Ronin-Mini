@@ -48,10 +48,16 @@ model-agnostic adapter (`models/`), never to a provider SDK directly.
   every agent. Also owns MCP server spawning, per-agent tool filtering, tool
   execution, the HITL approval gate, and loading externalized prompts/skills.
 - **`models/`** — `ModelAdapter` interface (`base.py`) + `AnthropicAdapter`
-  (`anthropic_adapter.py`, the only real implementation today) +
-  `build_adapter(provider, model)` (`__init__.py`), the one seam for adding a
-  second provider later. `agent_core.py` never imports a provider SDK
-  directly.
+  (`anthropic_adapter.py`) + `OpenAICompatibleAdapter`
+  (`openai_compatible_adapter.py`, backs any OpenAI-compatible provider —
+  OpenRouter, GLM/Zhipu direct, OpenAI itself — via constructor args, not a
+  new class per provider) + `build_adapter(provider, model)` (`__init__.py`),
+  the one seam every agent goes through. `agent_core.py` never imports a
+  provider SDK directly. `--provider openrouter --model qwen/qwen3.6-plus`
+  (or `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, any other OpenRouter model
+  slug) runs against it via OpenRouter (needs `OPENROUTER_API_KEY` set) —
+  one provider name covers every model OpenRouter fronts, picked via
+  `--model`; see `models/__init__.py` for the provider registry.
 - **`agents/*.md`** — externalized role prompts (`recon.md`, `exploit.md`,
   `verify.md`), loaded as `str.format()` templates.
 - **`skills/*.md`** — per-vulnerability-class methodology (14 vuln types),

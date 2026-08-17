@@ -15,6 +15,15 @@ PRICING: dict[str, tuple[float, float, float, float]] = {
     "claude-opus-4-6": (15.00, 75.00, 18.75, 1.50),
     "claude-sonnet-4-6": (3.00, 15.00, 3.75, 0.30),
     "claude-haiku-4-5": (0.80, 4.00, 1.00, 0.08),
+    # OpenRouter's free tier for this model -- confirmed genuinely $0 via the
+    # model's OpenRouter page ("Price: Free"), distinct from the paid
+    # "z-ai/glm-5.2" (no ":free" suffix). NOTE: if the paid variant is ever
+    # added here too, _rates_for's substring fallback would need tightening
+    # first -- "z-ai/glm-5.2" is literally a substring of
+    # "z-ai/glm-5.2:free", so an exact-match miss on the paid id could fall
+    # through to these $0 rates. Harmless today since only the free entry
+    # exists, but worth remembering before adding the paid one.
+    "z-ai/glm-5.2:free": (0.0, 0.0, 0.0, 0.0),
 }
 
 # Fallback for a model id not in PRICING (e.g. a new release): Sonnet-tier

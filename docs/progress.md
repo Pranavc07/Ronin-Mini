@@ -5,6 +5,119 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-17 — Fixed replay_probe crashing on non-Anthropic tool-call types
+- First live run against a non-Anthropic provider (Qwen3.6 Plus via
+  OpenRouter, `--provider openrouter`) against real Metasploitable, using
+  the same broad-coverage recon objective and budgets as the Claude
+  full-pwn run for comparison. Recon self-terminated (`end_turn`) at 75/120
+  tool calls with 25 findings -- notably less thorough than Claude's
+  119/120-call, 54-finding run on an identical budget, a real behavioral
+  difference between the two models, not a resource constraint. Full
+  pipeline completed for all 25 findings before the OpenRouter account ran
+  out of credits (real cost: ~$11.12 per our own tracking). Result: 1
+  verified (WebDAV at `/dav/`, matching the Claude runs' finding -- now
+  found independently by two different model providers, which is stronger
+  evidence it's real local environment drift than a single model's
+  hallucination), 11 dead-end, 7 incomplete, 6 unverifiable. One likely
+  inaccurate finding surfaced too: `f4` claimed "ProFTPD 1.3.1" on port 21,
+  which conflicts with `f1`'s (correct) vsftpd 2.3.4 on the same port --
+  Metasploitable 2 doesn't run ProFTPD at all; looks like a fabricated
+  banner rather than something nmap actually observed. Not investigated
+  further this session.
+- All 6 `unverifiable` findings turned out to share one real cause, not the
+  "no declared replay path" scenario built yesterday (that mechanism
+  wasn't triggered at all here): `replay_probe` was crashing outright with
+  real Python `TypeError`s. Root cause: Qwen, unlike Claude's native tool
+  use, didn't always emit correctly-typed nested tool-call arguments
+  matching the declared JSON schema -- a `metasploit` call's `port`/`lport`
+  recorded as strings ("3632"/"44440"), a `probe_variant` call's headers as
+  JSON-encoded strings instead of objects. The original `exploit_agent`
+  calls likely succeeded because the MCP server layer coerces types before
+  the registered tool function runs; replay calls the raw `run_*` function
+  directly, bypassing that coercion. `verify_agent` correctly read the
+  crash as `unverifiable`, not disproof -- the system worked as designed
+  even under a failure mode nobody anticipated -- but the crash itself was
+  a genuine bug.
+- Fixed with `_coerce_dict`/`_coerce_int` helpers in `categories/verify.py`,
+  applied at the specific dispatch sites that lacked defensive casting
+  (`probe_variant`'s header/params fields, `metasploit`'s `port`/`lport`/
+  `options`). `run_sqlmap`'s `level`/`risk` already wrapped `int(...)`
+  internally, so needed no change -- checked each tool's actual signature
+  before assuming where the fix belonged, rather than coercing everywhere
+  defensively. 10 new regression tests in `tests/test_verify.py` reproduce
+  the exact recorded shapes (`f3`'s stringified metasploit lport/port,
+  `f6`'s stringified probe_variant headers) from the live run that crashed.
+  145/146 tests pass (same pre-existing unrelated `test_mcp_server_full_flow`
+  failure).
+- NEXT: the `f4` ProFTPD-vs-vsftpd discrepancy and the "console.anthropic.com"
+  hardcoded string in `run.py`'s cost-estimate print (wrong for a
+  non-Anthropic run) were flagged but not fixed this session -- both minor,
+  neither blocking. No live re-run against Qwen done yet to confirm the fix
+  holds against real (not just reconstructed) data; would need more
+  OpenRouter credits.
+
+## 2026-08-17 — Generalized the OpenRouter provider from "glm" to "openrouter"
+- Live-tested `--provider glm --model glm-5.2` end to end against real
+  OpenRouter -- surfaced that the model id needed the `z-ai/` provider
+  prefix, and that the specific route (`z-ai/glm-5.2:free`) doesn't support
+  tool calling at all (a known, common OpenRouter free-tier limitation, not
+  a bug in our adapter -- confirmed via web research, not assumption).
+  Investigating paid alternatives, also caught and corrected two more wrong
+  assumptions live: an initial DeepSeek V4 Pro price quote sourced from a
+  blog turned out stale, and a specific DeepSeek endpoint
+  (`deepseek/deepseek-v4-pro-0813`) explicitly does NOT support tools per
+  its own OpenRouter FAQ data, despite looking usable at a glance. Verified
+  the next four candidates (Muse Glimmer 30B, Qwen3.6 Plus, GLM 5.2 paid,
+  DeepSeek V4 Pro `-0423`) directly against OpenRouter's own structured FAQ
+  data (JSON-LD, not marketing copy or search snippets) before trusting any
+  of them -- all four genuinely support tools.
+- User wants to try Qwen3.6 Plus next, same OpenRouter account/key as the
+  GLM attempt. Since OpenRouter is one account/key/endpoint fronting many
+  models, having a separate `"glm"` provider name (and a `GLM_API_KEY` env
+  var) was needlessly narrow -- renamed to a generic `"openrouter"`
+  provider backed by `OPENROUTER_API_KEY`, with the actual model selected
+  entirely via `--model` (`qwen/qwen3.6-plus`, `z-ai/glm-5.2`,
+  `deepseek/deepseek-v4-pro`, etc.). No new adapter logic, purely a rename
+  (`models/__init__.py`, `.env`, docs, one test comment). 136/137 tests
+  still pass (same pre-existing unrelated failure).
+- NEXT: user is getting an OpenRouter key set up to actually run
+  `--provider openrouter --model qwen/qwen3.6-plus` against Metasploitable.
+  No live run completed yet with any non-Anthropic provider.
+
+## 2026-08-17 — Second model provider: GLM via OpenAI-compatible adapter
+- User has a GLM (glm-5.2) API key via OpenRouter and wants to test it
+  against the same Metasploitable pipeline -- exactly the scenario the
+  Phase 0 adapter layer was built to make cheap. Confirmed it is: new file
+  + one `build_adapter` branch, no `agent_core.py`/agent-loop changes.
+- `models/openai_compatible_adapter.py`'s `OpenAICompatibleAdapter` speaks
+  OpenAI's chat-completions wire format (tools/tool_calls, one `role:
+  "tool"` message per result rather than Anthropic's single
+  user-turn-with-multiple-blocks shape). Kept generic on purpose --
+  `base_url`/`api_key_env` are constructor params, not hardcoded -- so it's
+  not GLM-specific, it's "any OpenAI-compatible provider." `finish_reason`
+  values normalized to Anthropic's vocabulary (`tool_calls`→`tool_use`,
+  `stop`→`end_turn`) so `run.py`'s printed stop_reason stays consistent
+  across providers.
+- `models/__init__.py`'s `"glm"` provider registers a small factory
+  function pointing the adapter at OpenRouter
+  (`https://openrouter.ai/api/v1`, key from `GLM_API_KEY` env var) --
+  confirmed with the user which endpoint/model-id string to use rather than
+  guessing (OpenRouter vs GLM/Zhipu direct use different base URLs and the
+  key wouldn't authenticate against the wrong one).
+- 7 new unit tests (`tests/test_openai_compatible_adapter.py`): message
+  translation (incl. the multi-tool-result expansion difference from
+  Anthropic's shape), tool schema translation, response parsing (tool
+  calls, usage, finish_reason normalization), malformed tool-call-argument
+  JSON defaults to `{}` rather than crashing. `openai` added to
+  requirements.txt. 135/136 tests pass (same one pre-existing unrelated
+  `test_mcp_server_full_flow` failure).
+- NEXT: user needs to add `GLM_API_KEY=...` to `.env` and run
+  `run.py --provider glm --model glm-5.2 ...` themselves (live pentest runs
+  against a real target are blocked by the harness's own auto-mode
+  classifier when attempted via the assistant's own tool calls -- same
+  restriction hit earlier in the Metasploitable full-pwn session). Live
+  check against Metasploitable not yet done.
+
 ## 2026-08-16 — Structural fix: `unverifiable` status + manifest-declared replay coverage
 - Follow-up to the false-positive replay bug fixed 2026-08-15. That fix
   (extending `REPLAYABLE_TOOLS` to cover `network_exploit` + `metasploit`)

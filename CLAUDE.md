@@ -24,16 +24,34 @@ differ only in role prompt, tool allowlist, and what they do with the result.
 `anthropic.AsyncAnthropic()` directly. `models/base.py` defines the neutral
 shapes (`Turn`, `ToolCall`, `ToolResult`, `ModelResponse`) and the
 `ModelAdapter.send_messages(system, messages, tools, max_tokens)` interface;
-`models/anthropic_adapter.py`'s `AnthropicAdapter` is the only real
-implementation, translating the *entire* `Turn` history to/from Anthropic's
-native message-block shape on every call (not just the response) — that's
-what keeps `agent_core.py` provider-agnostic rather than just wrapping one
-provider's response. `models/__init__.py`'s `build_adapter(provider, model)`
-is the one seam every `run_*_agent()` calls through; each takes a
-`provider: str = "anthropic"` param threaded from the CLI's `--provider`
-flag (`main.py`, `run.py`). Adding a second provider is a new adapter file +
-one more branch in `build_adapter` — no router, no per-turn model
-selection, no rewrite of `agent_core.py` or any agent loop.
+`models/anthropic_adapter.py`'s `AnthropicAdapter` translates the *entire*
+`Turn` history to/from Anthropic's native message-block shape on every call
+(not just the response) — that's what keeps `agent_core.py` provider-agnostic
+rather than just wrapping one provider's response. `models/__init__.py`'s
+`build_adapter(provider, model)` is the one seam every `run_*_agent()` calls
+through; each takes a `provider: str = "anthropic"` param threaded from the
+CLI's `--provider` flag (`main.py`, `run.py`).
+
+Second provider, proving the design: `models/openai_compatible_adapter.py`'s
+`OpenAICompatibleAdapter` speaks the OpenAI chat-completions wire format
+(`tools`/`tool_calls`, one `role: "tool"` message per result rather than
+Anthropic's single user-turn-with-multiple-blocks shape), so it works for
+*any* OpenAI-compatible provider — OpenRouter, GLM/Zhipu direct, OpenAI
+itself — not just one. `base_url` and which env var holds the API key are
+constructor params, not hardcoded in the class; `models/__init__.py`'s
+`"openrouter"` provider wires it to OpenRouter (`https://openrouter.ai/api/v1`,
+key from `OPENROUTER_API_KEY`) — one provider entry covers every model
+OpenRouter fronts (GLM, Qwen, DeepSeek, ...), selected via `--model`
+(e.g. `--model qwen/qwen3.6-plus`), not a new provider name per model
+family. A genuinely different endpoint (GLM/Zhipu direct rather than via
+OpenRouter) would be its own `_build_*` factory pointed at a different
+`base_url`/`api_key_env`, same adapter class, no new class needed.
+`finish_reason` values are normalized to
+Anthropic's vocabulary (`"tool_calls"` → `"tool_use"`, `"stop"` →
+`"end_turn"`) so `run.py`'s printed `stop_reason` reads consistently
+regardless of which adapter produced it. Confirms adding a provider really
+is a new adapter file + one more branch in `build_adapter` — no router, no
+per-turn model selection, no rewrite of `agent_core.py` or any agent loop.
 
 ## Token usage + cost tracking
 
@@ -234,6 +252,30 @@ code, not via the model.
   idempotent scans/lookups. A `false_positive` from a genuinely-failed live
   replay of a real exploit is a different thing from either bug above — this
   remains an open, harder problem, not fixed here.
+
+  **A third, distinct bug** surfaced live-testing a non-Anthropic provider
+  (Qwen3.6 Plus via OpenRouter, see the model-adapter section above):
+  `replay_probe` crashed outright on some recorded calls with real Python
+  `TypeError`s (`'<=' not supported between instances of 'int' and 'str'`;
+  `'str' object has no attribute 'items'`) rather than replaying them.
+  Root cause: unlike Claude's native tool use, that model didn't always emit
+  correctly-typed nested tool-call arguments matching the declared JSON
+  schema — a `metasploit` call's `lport`/`port` came back as strings, a
+  `probe_variant` call's headers as JSON-encoded strings instead of actual
+  objects. The *original* `exploit_agent` calls apparently succeeded anyway
+  (the MCP server layer likely coerces types before the registered tool
+  function runs); replay bypasses that layer entirely, calling the raw
+  `run_*` function directly, so the mismatch that got smoothed over the
+  first time crashed on replay. `verify_agent` correctly treated the crash
+  as `unverifiable` rather than misreading it as disproof (the system
+  working as designed even under an unanticipated failure mode) — but the
+  crash itself was a real bug. Fixed with `_coerce_dict`/`_coerce_int`
+  helpers in `categories/verify.py`'s `_replay_call`, applied to the
+  specific int/dict-typed fields (`probe_variant`'s four header/params
+  params, `metasploit`'s `port`/`lport`/`options`) that had no defensive
+  casting — `run_sqlmap`'s `level`/`risk` already wrap `int(...)` internally
+  so needed no change. 10 new regression tests reproduce the exact recorded
+  shapes from the live run that crashed.
 
 Schema: `{"findings": [{id, type, target, evidence, status, discovered_by,
 exploit_attempts:[...], verify_attempts:[...]}]}`.
