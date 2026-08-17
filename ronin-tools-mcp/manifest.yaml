@@ -2,9 +2,26 @@
 #
 # category: recon | web_exploit | network_exploit | fileops | verify | attack_reference | metasploit_exploit
 # timeout_seconds bounds a single tool call server-side (executor.py enforces it).
+# replayable: "true" | "false" | "partial" -- declares whether categories/verify.py's
+#   replay_probe has real replay support for a winning exploit_attempt that used this
+#   tool. Required for every tool (manifest.py reads it via entry["replayable"], not
+#   .get() with a default) -- a new tool added without deciding this fails loudly at
+#   load_manifest() time rather than silently reopening the exact bug this field exists
+#   to prevent: a tool exploit_agent can call, that replay_probe doesn't know how to
+#   replay, silently producing "nothing to verify" -- which verify_agent used to read as
+#   disproof (a real Metasploit-confirmed root shell got marked false_positive this way).
+#   "true": real, faithful replay dispatch exists in categories/verify.py's _replay_call.
+#   "partial": real dispatch exists and genuinely re-executes the action, but replay
+#     fidelity has a known live-environment caveat (see the per-tool comment below).
+#   "false": no replay dispatch exists -- replay_probe returns a structured
+#     {"replayable": false, "reason": ...} stub for calls to this tool, and verify_agent
+#     must conclude "unverifiable", never "false_positive", from that alone. Only valid
+#     for tools recon_agent/verify_agent-only -- see tests/test_replay_coverage.py,
+#     which requires real dispatch for every "true"/"partial" tool exploit_agent can
+#     reach, and fails the moment a new exploit-agent-reachable tool lands undecided.
 # This file is the single source of truth for: server-side per-tool timeouts,
-# client-side category-based tool allowlisting, and each category's HITL
-# require_approval default (see the categories: block below).
+# client-side category-based tool allowlisting, each category's HITL
+# require_approval default (see the categories: block below), and replay coverage.
 
 categories:
   recon: {require_approval: false}
@@ -21,21 +38,28 @@ tools:
     category: recon
     description: Send an HTTP request to a target URL within scope.
     timeout_seconds: 15
+    # recon-only category -- exploit_agent can never produce a winning attempt
+    # using this tool, so it can never appear in something replay_probe needs
+    # to replay. Not a coverage gap, just structurally not applicable.
+    replayable: "false"
 
   dns_lookup:
     category: recon
     description: Resolve A/AAAA/CNAME/TXT DNS records for a hostname within scope.
     timeout_seconds: 15
+    replayable: "false"  # same reason as http_request
 
   code_search:
     category: fileops
     description: Search source code for a regex pattern using ripgrep, scoped to the allowed directory.
     timeout_seconds: 15
+    replayable: "false"  # fileops-only category, not exploit_agent-reachable
 
   file_read:
     category: fileops
     description: Read a file's contents, read-only, scoped to the allowed directory.
     timeout_seconds: 15
+    replayable: "false"  # fileops-only category, not exploit_agent-reachable
 
   probe_variant:
     category: web_exploit
@@ -45,6 +69,7 @@ tools:
       e.g. request an endpoint with a valid session, then again with a
       different user's ID or a stripped Authorization header, and compare.
     timeout_seconds: 20
+    replayable: "true"  # deterministic HTTP baseline/variant diff, faithfully re-executable
 
   execute_python:
     category: exploit_runtime
@@ -57,6 +82,7 @@ tools:
       guarantee (helper + prompt convention), not a hard technical one --
       see categories/exploit_runtime.py for the full sandboxing writeup.
     timeout_seconds: 25
+    replayable: "true"  # re-runs the exact recorded code in a fresh sandbox
 
   replay_probe:
     category: verify
@@ -66,6 +92,9 @@ tools:
       output for each. A literal replay for independent verification -- not new
       exploration. The only tool the verify agent is given.
     timeout_seconds: 120
+    # verify-only category -- exploit_agent can never call replay_probe itself,
+    # so it can never appear inside a winning attempt's own transcript either.
+    replayable: "false"
 
   lookup_attack_technique:
     category: attack_reference
@@ -76,6 +105,7 @@ tools:
       methodology is available for a finding, to ground your testing
       approach in a real technique rather than guessing.
     timeout_seconds: 5
+    replayable: "true"  # static local JSON lookup, always returns identical output
 
   nmap:
     category: network_exploit
@@ -84,6 +114,7 @@ tools:
       "default_scripts", or "full_port_range". Optional ports restricts to
       specific ports/ranges.
     timeout_seconds: 300
+    replayable: "true"  # idempotent scan
 
   nikto:
     category: network_exploit
@@ -91,6 +122,7 @@ tools:
       Run nikto against a target web server to find known-vulnerable
       files/CGIs, outdated software, and misconfigurations.
     timeout_seconds: 120
+    replayable: "true"  # idempotent scan
 
   sqlmap:
     category: network_exploit
@@ -98,6 +130,7 @@ tools:
       Run sqlmap against a URL to detect and exploit SQL injection.
       Non-interactive (--batch) always.
     timeout_seconds: 300
+    replayable: "true"  # idempotent probe
 
   hydra:
     category: network_exploit
@@ -105,6 +138,11 @@ tools:
       Brute-force credentials against an ssh or ftp service. Wordlists only
       (rockyou/common_top100/top_usernames), never a raw filesystem path.
     timeout_seconds: 120
+    # Real dispatch exists and genuinely re-attempts the brute force, but a
+    # second run can legitimately behave differently from the first --
+    # account lockout, rate-limiting, or service state changed by the first
+    # attempt. Not a missing implementation, a live-environment caveat.
+    replayable: "partial"
 
   gobuster:
     category: network_exploit
@@ -112,6 +150,7 @@ tools:
       Content-discovery scan against a web target (dir mode only). Fixed
       seclists wordlist enum (common/medium), fixed extension set.
     timeout_seconds: 180
+    replayable: "true"  # idempotent scan
 
   enum4linux:
     category: network_exploit
@@ -119,6 +158,7 @@ tools:
       Enumerate a target's SMB service with enum4linux-ng. level: "basic"
       (fast) or "full" (comprehensive).
     timeout_seconds: 180
+    replayable: "true"  # idempotent enumeration
 
   searchsploit:
     category: network_exploit
@@ -126,6 +166,7 @@ tools:
       Search the local, offline exploit-db database for known exploits
       matching a service name/version. No network access.
     timeout_seconds: 30
+    replayable: "true"  # offline local DB lookup, no target interaction at all
 
   metasploit:
     category: metasploit_exploit
@@ -135,3 +176,9 @@ tools:
       payload/lhost/lport for reverse payloads (lport must be in the
       published range). exploit_agent-only.
     timeout_seconds: 300
+    # Real dispatch exists and genuinely re-invokes the module, but success
+    # isn't guaranteed to reproduce even a genuine exploit: one-shot triggers
+    # (e.g. the vsftpd 2.3.4 backdoor doesn't reliably re-trigger without a
+    # service restart) and reverse-shell payloads depend on LHOST/network
+    # topology matching the original run. See CLAUDE.md's Metasploit section.
+    replayable: "partial"

@@ -187,25 +187,53 @@ code, not via the model.
   `incomplete` = never produced a verdict (e.g. burned budget) — NOT the same as
   `dead-end` (investigated, concluded not vulnerable).
 - verify → each `exploited`: `verifying → verified | false_positive |
-  verify_incomplete`, appends to `verify_attempts`. `replay_probe` reads the
-  winning attempt from findings.json (server gets `--findings-path`) and replays
-  its recorded tool calls (all of them, capped at 12). `categories/verify.py`'s
-  `REPLAYABLE_TOOLS` must include every tool `exploit_agent` can reach
-  (`test_verify.py::test_every_exploit_agent_tool_is_replayable` enforces this) —
-  a winning attempt using a tool replay doesn't know how to run finds zero
-  replayable calls, and verify concludes `false_positive` on what may be a
-  completely real exploit. This happened for real: network_exploit's 7 tools
-  and `metasploit` were added to exploit_agent without this file being
-  updated, and a live run against Metasploitable mislabeled 3 genuine
-  Metasploit-confirmed exploits (incl. a root shell) as false positives.
-  **Separately** (not the same issue, not fixed by the above): replaying a
-  *live exploit* a second time can legitimately fail for reasons outside the
-  code's control — some exploits are one-shot on the target (e.g. the vsftpd
-  2.3.4 backdoor doesn't reliably re-trigger without a service restart), and
-  reverse-payload replay depends on the same LHOST/network topology caveat as
-  the original run. A `false_positive` from a genuinely-failed live replay is
-  a different thing from a `false_positive` because nothing was replayed at
-  all — the fix above only addresses the latter.
+  unverifiable | verify_incomplete`, appends to `verify_attempts`.
+  `replay_probe` (`categories/verify.py`'s `run_replay_probe`) reads the
+  winning attempt from findings.json (server gets `--findings-path`) and
+  walks its recorded tool calls (capped at 12 *actually replayed* calls —
+  stub entries for undeclared tools don't count against the cap). For each
+  call it either genuinely replays it (real dispatch, `_replay_call`) or, if
+  no replay support exists for that tool, returns an explicit
+  `{"replayable": false, "reason": ...}` stub — every call from the original
+  transcript shows up in the output, none are silently dropped.
+  `unverifiable` is the status for "the tooling has no way to confirm or
+  refute this" (a coverage gap) — distinct from `false_positive`, which is
+  reserved for "a replay actually ran and its output contradicted the
+  claim." This happened for real, twice, in different forms: (1) originally,
+  a winning attempt using a tool `replay_probe` didn't know how to run
+  filtered down to zero replayable calls, and verify read that emptiness as
+  disproof — network_exploit's 7 tools and `metasploit` were added to
+  exploit_agent without `categories/verify.py` being updated, and a live run
+  against Metasploitable mislabeled 3 genuine Metasploit-confirmed exploits
+  (incl. a root shell) as `false_positive`. That specific gap is fixed —
+  every tool exploit_agent can reach today has real replay support. (2) The
+  *structural* version of the same bug: nothing stopped it from recurring
+  for the next tool added without anyone deciding what replay should do with
+  it. Fixed by making replay coverage manifest-declared and enforced at two
+  layers: `manifest.yaml` requires every tool to declare
+  `replayable: "true" | "false" | "partial"` (`manifest.py` reads it via
+  required-key indexing, not `.get()` — a missing field fails loudly at
+  `load_manifest()` time, before any test even runs); and
+  `categories/verify.py`'s `REPLAYABLE_TOOLS` set is *derived* from that
+  field rather than hand-maintained, with `tests/test_replay_coverage.py`
+  asserting every `replayable: "true"/"partial"` tool reachable by
+  exploit_agent has a real `_replay_call` dispatch case (not the generic
+  fallback). A tool correctly declared `replayable: "false"` now produces
+  the explicit stub, and `agents/verify.md` instructs the model: if the
+  calls central to a claim are unreplayable and nothing else in the
+  transcript contradicts it, conclude `unverifiable`, never `false_positive`.
+  **Separately** (not the same issue, not addressed by any of the above):
+  replaying a *live exploit* a second time can legitimately fail for reasons
+  outside the code's control — some exploits are one-shot on the target
+  (e.g. the vsftpd 2.3.4 backdoor doesn't reliably re-trigger without a
+  service restart), and reverse-payload replay depends on the same
+  LHOST/network topology caveat as the original run. `metasploit` and
+  `hydra` are declared `replayable: "partial"` in `manifest.yaml` to flag
+  this in-band — real dispatch exists and genuinely re-executes the action,
+  but replay fidelity for these two isn't guaranteed the way it is for
+  idempotent scans/lookups. A `false_positive` from a genuinely-failed live
+  replay of a real exploit is a different thing from either bug above — this
+  remains an open, harder problem, not fixed here.
 
 Schema: `{"findings": [{id, type, target, evidence, status, discovered_by,
 exploit_attempts:[...], verify_attempts:[...]}]}`.

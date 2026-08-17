@@ -60,8 +60,9 @@ model-agnostic adapter (`models/`), never to a provider SDK directly.
   loads the matching skill for a finding's type; when only a `stub` exists,
   it falls back to a local, offline ATT&CK lookup tool instead of guessing.
 - **`ronin-tools-mcp/`** — the MCP server. Tools are grouped into categories
-  (`manifest.yaml` is the registry: timeouts + HITL default per category);
-  every call routes through `scope.py` before touching anything, so a
+  (`manifest.yaml` is the registry: timeouts + HITL default + declared replay
+  coverage per tool — see [Replay coverage](#replay-coverage-and-the-unverifiable-status)
+  below); every call routes through `scope.py` before touching anything, so a
   disallowed host or path is rejected in code, not just discouraged by the
   prompt.
 - **HITL approval gate** — three modes (`--hitl-mode`, default `auto`):
@@ -71,7 +72,10 @@ model-agnostic adapter (`models/`), never to a provider SDK directly.
   `network_exploit` tool, and `metasploit`.
 - **`findings.json`** — the state file three-agent mode hands off through:
   `new → claimed → exploited | dead-end | incomplete → verifying → verified
-  | false_positive | verify_incomplete`.
+  | false_positive | unverifiable | verify_incomplete`. `unverifiable` means
+  the verification tooling has no way to confirm or refute the claim (a
+  coverage gap) — distinct from `false_positive`, which means a replay
+  actually ran and contradicted it.
 - **Token usage + cost** — every model call's token usage is captured on
   `ModelResponse` and summed across a run by `agent_core.run_tool_loop`.
   `main.py`/`run.py` print token counts and an estimated dollar cost after
@@ -192,10 +196,41 @@ everything before going deep on the first interesting thing it finds.
 
 3. **`verify_agent`** (tools: **only** `replay_probe` — it cannot reach
    recon/exploit tools, by design) re-checks each `status: exploited`
-   finding: `verifying → verified | false_positive | verify_incomplete`.
-   `replay_probe` literally re-runs the winning attempt's recorded tool
-   calls and diffs original-vs-replayed output — independent confirmation,
-   not new exploration.
+   finding: `verifying → verified | false_positive | unverifiable |
+   verify_incomplete`. `replay_probe` literally re-runs the winning
+   attempt's recorded tool calls and diffs original-vs-replayed output —
+   independent confirmation, not new exploration.
+
+### Replay coverage and the `unverifiable` status
+
+`replay_probe` walks every recorded call in a winning attempt's transcript.
+For a call to a tool with real replay support, it genuinely re-executes it
+and returns original-vs-replayed output. For a call to a tool with no
+declared replay support, it returns an explicit `{"replayable": false,
+"reason": ...}` stub instead of silently dropping the call — every call from
+the original transcript shows up, none vanish. `verify_agent`'s prompt
+(`agents/verify.md`) is instructed accordingly: `false_positive` is reserved
+for "a replay actually ran and contradicted the claim"; `unverifiable` means
+"the tooling has no way to confirm or refute this" — a coverage gap, not a
+falsification.
+
+Coverage is manifest-declared, not hand-maintained: every tool in
+`manifest.yaml` requires a `replayable: "true" | "false" | "partial"` field
+(`manifest.py` reads it via required-key indexing — a tool added without
+declaring this fails loudly at `load_manifest()` time, not silently).
+`categories/verify.py`'s replayable-tool set is *derived* from that field, so
+it can't drift out of sync with the manifest the way a separately
+hand-maintained list can. `tests/test_replay_coverage.py` asserts every
+`"true"`/`"partial"` tool reachable by `exploit_agent` has a real dispatch
+case in `_replay_call` — this is what fails automatically the moment a new
+tool lands in a category `exploit_agent` can reach without anyone deciding
+what replay should do with it, which is exactly how a real Metasploit-
+confirmed root shell once got mislabeled `false_positive` (see `CLAUDE.md`
+for the full incident writeup). `"partial"` (currently `hydra` and
+`metasploit`) marks tools with real dispatch whose replay fidelity has a
+known live-environment caveat — e.g. a one-shot exploit trigger, or a
+reverse-shell payload depending on network topology matching the original
+run — separate from the coverage-gap problem `unverifiable` solves.
 
 ### `execute_python` sandboxing
 

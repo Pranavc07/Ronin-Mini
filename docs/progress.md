@@ -5,6 +5,77 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-16 — Structural fix: `unverifiable` status + manifest-declared replay coverage
+- Follow-up to the false-positive replay bug fixed 2026-08-15. That fix
+  (extending `REPLAYABLE_TOOLS` to cover `network_exploit` + `metasploit`)
+  addressed the specific tools involved, but left the *mechanism* unfixed:
+  `REPLAYABLE_TOOLS` was still a hand-maintained tuple that happened to be
+  kept in sync by one regression test -- a new tool landing in a category
+  `exploit_agent` can reach, without anyone updating that tuple, would
+  silently reopen the identical bug. Worth noting: by the time this session
+  started, `metasploit` already had real replay support (confirmed by
+  reading the current code before touching anything) -- the user's initial
+  framing described the pre-fix symptom, which no longer matches what's in
+  the repo; flagged and corrected before writing any code.
+- New finding status `unverifiable`, distinct from `false_positive`: means
+  the verification tooling has no way to confirm or refute a claim (a
+  coverage gap), never a disproof. `categories/verify.py`'s
+  `run_replay_probe` (refactored out of the `register()` closure into a
+  testable module-level function, matching every other category's `run_*`
+  pattern) now walks every recorded call in a winning attempt and returns
+  either a real replay (tool has dispatch support) or an explicit
+  `{"replayable": false, "reason": ...}` stub (tool doesn't) -- every call
+  from the original transcript is visible in the output, none silently
+  vanish. `agents/verify.md` updated: `false_positive` is reserved for "a
+  replay actually ran and contradicted the claim"; `unverifiable` for
+  everything else. `verify_agent/loop.py` recognizes `unverifiable` as a
+  terminal verdict status.
+- `manifest.yaml` now requires every tool to declare
+  `replayable: "true" | "false" | "partial"`; `manifest.py` reads it via
+  required-key indexing (`entry["replayable"]`, not `.get()`), so a tool
+  added without deciding this fails loudly at `load_manifest()` time --
+  every code path that loads the manifest, not just a dedicated test.
+  `categories/verify.py`'s replayable-tool set is now *derived* from this
+  field instead of hand-maintained, structurally preventing the drift that
+  caused the original bug. Audited and declared for all 17 existing tools:
+  11 `"true"` (deterministic/idempotent -- probe_variant, execute_python,
+  the 6 idempotent network_exploit scans/lookups, lookup_attack_technique),
+  2 `"partial"` (hydra, metasploit -- real dispatch exists and genuinely
+  re-executes, but replay fidelity has a known live-environment caveat:
+  account lockout/rate-limiting for hydra, one-shot exploit triggers and
+  LHOST/network-topology dependence for metasploit), 4 `"false"`
+  (http_request, dns_lookup, code_search, file_read, replay_probe itself --
+  all structurally unreachable by exploit_agent, so replay coverage is moot
+  for them, not a gap).
+- `tests/test_replay_coverage.py` (new, 8 tests): asserts every manifest
+  tool declares a valid `replayable` value; `load_manifest()` raises
+  (behaviorally tested, not just inspected) on a missing or invalid
+  `replayable` field; every `"true"`/`"partial"` tool `exploit_agent` can
+  reach has a real `_replay_call` dispatch case (parametrized per tool,
+  fails with a specific message naming the missing case); `"false"` tools
+  never reach real dispatch. `tests/test_verify.py` gained 4 more:
+  regression-checks the *original* bug against current code (a
+  reconstructed CVE-2011-2523-shaped metasploit winning attempt dispatches
+  to real replay, not a stub -- proving that bug stays fixed); a synthetic
+  undeclared-tool case proving the *new* unverifiable mechanism actually
+  fires (metasploit itself can't exercise this path anymore since it's
+  already replayable -- used a synthetic tool name instead, and said so
+  explicitly rather than silently substituting); a mixed-calls case;
+  existing `test_every_exploit_agent_tool_is_replayable` generalized to
+  allow a legitimately-declared `"false"` tool rather than requiring every
+  exploit-agent tool be replayable. 128/129 tests pass (Docker/live-API
+  tests skipped as usual); the one failure is the pre-existing, unrelated
+  `test_mcp_server_full_flow` stale-tool-list issue, already flagged as a
+  separate background task.
+- NEXT: no committed next step for this fix. Two related, explicitly
+  out-of-scope items surfaced but not built: (1) real metasploit-module
+  replay improvements (this pass only prevents mislabeling, doesn't improve
+  live-replay fidelity) -- a real feature deserving its own scoped design;
+  (2) the separate, still-open problem of a *genuinely-run* live replay
+  failing for one-shot/network-topology reasons and getting conflated with
+  a real `false_positive` -- `"partial"` flags this in-band now but doesn't
+  solve it. Awaiting user decision on whether/when to commit this change.
+
 ## 2026-08-16 — Token usage + cost tracking
 - Added after a live Metasploitable full-pwn run hit `credit balance too low`
   mid-exploit-stage, and there was no way to answer "how much has this

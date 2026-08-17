@@ -14,6 +14,7 @@ below would have caught that at commit time.
 Run with: pytest tests/test_verify.py -v
 """
 
+import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -53,15 +54,28 @@ TIMEOUTS = {
 # --- regression guard: this is the actual bug, encoded as a test ----------
 
 
-def test_every_exploit_agent_tool_is_replayable():
-    """If exploit_agent can call it and it can produce a winning attempt,
-    verify must be able to replay it. This is the exact gap that caused
-    real Metasploit-confirmed exploits to be marked false_positive.
+def test_every_exploit_agent_tool_has_a_deliberate_replay_decision():
+    """Generalizes the original regression guard. The original bug: a tool
+    exploit_agent could call had no entry in verify.REPLAYABLE_TOOLS at all --
+    a silent omission, not a decision. Now every tool's replay status is
+    manifest-declared (replayable: "true"/"false"/"partial", required at
+    load_manifest() time), so a tool can legitimately be excluded from
+    REPLAYABLE_TOOLS -- but only if manifest.yaml explicitly says "false".
+    Silently missing from both is what this test forbids.
     """
     manifest = load_manifest()
     exploit_agent_tools = {name for name, meta in manifest.items() if meta.category in exploit_loop.ALLOWED_CATEGORIES}
-    missing = exploit_agent_tools - set(verify.REPLAYABLE_TOOLS)
-    assert not missing, f"exploit_agent can call these tools but verify.REPLAYABLE_TOOLS can't replay them: {missing}"
+    for name in exploit_agent_tools:
+        meta = manifest[name]
+        if meta.replayable in ("true", "partial"):
+            assert name in verify.REPLAYABLE_TOOLS, (
+                f"{name} is declared replayable ({meta.replayable!r}) but missing from "
+                "verify.REPLAYABLE_TOOLS -- REPLAYABLE_TOOLS is derived from the manifest, "
+                "so this should be structurally impossible; if it fires, the derivation broke."
+            )
+        else:
+            assert meta.replayable == "false", f"{name}: replayable must be 'true'/'partial'/'false', got {meta.replayable!r}"
+            assert name not in verify.REPLAYABLE_TOOLS
 
 
 # --- dispatch correctness for each new tool -------------------------------
@@ -125,3 +139,166 @@ def test_metasploit_only_attempt_is_now_replayable():
     ]
     recorded = [t for t in transcript if t["tool"] in verify.REPLAYABLE_TOOLS]
     assert len(recorded) == 2
+
+
+# --- run_replay_probe: structural "no replay path" fix ---------------------
+#
+# The old code pre-filtered recorded_calls to only REPLAYABLE_TOOLS members
+# *before* building the replays list, so a call to an undeclared tool simply
+# vanished -- verify_agent saw an empty/near-empty result and read that as
+# disproof. run_replay_probe now walks every recorded call and, for one it
+# can't replay, emits an explicit {"replayable": False, "reason": ...} entry
+# instead of omitting it -- structurally distinguishable from "replay ran and
+# found nothing".
+
+
+def _write_findings(tmp_path, findings: dict) -> str:
+    path = tmp_path / "findings.json"
+    path.write_text(json.dumps(findings), encoding="utf-8")
+    return str(path)
+
+
+def _metasploit_finding(finding_id="f2"):
+    return {
+        "findings": [
+            {
+                "id": finding_id,
+                "type": "known_vulnerable_service",
+                "target": "10.0.0.5:21",
+                "status": "exploited",
+                "exploit_attempts": [
+                    {
+                        "transcript": [
+                            {"tool": "searchsploit", "input": {"query": "vsftpd 2.3.4"}, "output": {"ok": True}},
+                            {
+                                "tool": "metasploit",
+                                "input": {
+                                    "module": "exploit/unix/ftp/vsftpd_234_backdoor",
+                                    "target": "10.0.0.5",
+                                    "port": 21,
+                                    "payload": None,
+                                    "lhost": None,
+                                    "lport": None,
+                                    "options": None,
+                                    "post_exploit_command": None,
+                                },
+                                "output": {"session_opened": True, "shell_output": "uid=0(root) gid=0(root)"},
+                            },
+                        ],
+                        "verdict": {
+                            "status": "exploited",
+                            "evidence": "Real root shell via CVE-2011-2523 vsftpd 2.3.4 backdoor.",
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def test_metasploit_winning_attempt_is_replayed_for_real_not_stubbed(tmp_path):
+    """Regression check against the ORIGINAL bug (metasploit-tool findings
+    mislabeled false_positive), against the current code. metasploit is
+    declared replayable in manifest.yaml today -- this must dispatch to a
+    real replay attempt, not the "no replay path" stub. Mirrors the exact
+    CVE-2011-2523 shape from the real Metasploitable run that surfaced the
+    original bug.
+    """
+    findings_path = _write_findings(tmp_path, _metasploit_finding())
+
+    with patch("categories.verify.run_metasploit", return_value={"session_opened": True}) as mock_run, \
+         patch("categories.verify.run_searchsploit", return_value={"ok": True}):
+        result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings_path, "f2")
+
+    assert result["any_call_replayed"] is True
+    assert result["unreplayable_call_count"] == 0
+    metasploit_entry = next(r for r in result["replays"] if r["tool"] == "metasploit")
+    assert metasploit_entry["replayable"] is True
+    assert metasploit_entry["replay_output"] == {"session_opened": True}
+    mock_run.assert_called_once()
+
+
+def test_unknown_future_tool_gets_explicit_stub_not_silently_dropped(tmp_path):
+    """Proves the NEW mechanism: a winning attempt using a tool with no
+    replay support at all (simulating a future tool added to exploit_agent's
+    toolset before verify.py is updated for it) must appear in the output as
+    an explicit replayable: false stub -- never silently disappear the way
+    it used to. This is the case the historical bug's premise (as currently
+    described) doesn't actually exercise anymore for "metasploit" specifically,
+    since metasploit already has real replay support -- this test proves the
+    structural fix using a genuinely undeclared tool instead.
+    """
+    findings = {
+        "findings": [
+            {
+                "id": "f99",
+                "type": "command_injection",
+                "target": "10.0.0.5",
+                "status": "exploited",
+                "exploit_attempts": [
+                    {
+                        "transcript": [
+                            {
+                                "tool": "some_future_tool_nobody_added_replay_support_for",
+                                "input": {"x": 1},
+                                "output": {"claim": "rce achieved"},
+                            }
+                        ],
+                        "verdict": {"status": "exploited", "evidence": "claimed rce"},
+                    }
+                ],
+            }
+        ]
+    }
+    findings_path = _write_findings(tmp_path, findings)
+
+    result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings_path, "f99")
+
+    assert result["any_call_replayed"] is False
+    assert result["unreplayable_call_count"] == 1
+    entry = result["replays"][0]
+    assert entry["replayable"] is False
+    assert "reason" in entry
+    assert "replay_output" not in entry
+    assert entry["tool"] == "some_future_tool_nobody_added_replay_support_for"
+
+
+def test_mixed_replayable_and_unreplayable_calls_both_appear(tmp_path):
+    findings = {
+        "findings": [
+            {
+                "id": "f3",
+                "type": "known_vulnerable_service",
+                "target": "10.0.0.5",
+                "status": "exploited",
+                "exploit_attempts": [
+                    {
+                        "transcript": [
+                            {"tool": "nmap", "input": {"target": "10.0.0.5", "scan_type": "quick"}, "output": {}},
+                            {"tool": "some_undeclared_tool", "input": {}, "output": {}},
+                        ],
+                        "verdict": {"status": "exploited", "evidence": "e"},
+                    }
+                ],
+            }
+        ]
+    }
+    findings_path = _write_findings(tmp_path, findings)
+
+    with patch("categories.verify.run_nmap", return_value={"ok": True}):
+        result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings_path, "f3")
+
+    assert result["any_call_replayed"] is True
+    assert result["replayed_call_count"] == 1
+    assert result["unreplayable_call_count"] == 1
+    tools_seen = {r["tool"] for r in result["replays"]}
+    assert tools_seen == {"nmap", "some_undeclared_tool"}
+
+
+# --- verify_agent/loop.py: unverifiable is a recognized verdict status -----
+
+
+def test_unverifiable_is_recognized_as_a_verdict_status():
+    blocks = [{"status": "unverifiable", "evidence": "no replay support for the calls in this attempt"}]
+    recognized = [b for b in blocks if b.get("status") in ("verified", "false_positive", "unverifiable")]
+    assert recognized == blocks

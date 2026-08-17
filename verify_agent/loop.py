@@ -6,8 +6,15 @@ whether the claimed impact still holds.
 
 Reads findings.json, processes each status == "exploited" finding one at a time
 in its own fresh conversation (claim pattern: exploited -> verifying ->
-verified | false_positive | verify_incomplete), appending its own reasoning to
-a new verify_attempts field on the finding.
+verified | false_positive | unverifiable | verify_incomplete), appending its
+own reasoning to a new verify_attempts field on the finding.
+
+unverifiable is distinct from false_positive: it means replay_probe reported
+replayable: false for the calls central to the claim (no replay support
+exists for those tools yet) -- a tooling coverage gap, not a replay that ran
+and contradicted the claim. false_positive is reserved for the latter.
+verify_incomplete (parallel to exploit_agent's "incomplete") means neither
+verdict was reached before the budget ran out.
 """
 
 import json
@@ -92,7 +99,7 @@ async def _process_one_finding(
         hitl_mode=hitl_mode,
     )
 
-    verdicts = [b for b in result["extracted_blocks"] if b.get("status") in ("verified", "false_positive")]
+    verdicts = [b for b in result["extracted_blocks"] if b.get("status") in ("verified", "false_positive", "unverifiable")]
     if verdicts:
         verdict = verdicts[-1]
         status = verdict["status"]
