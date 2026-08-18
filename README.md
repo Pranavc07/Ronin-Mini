@@ -1,6 +1,6 @@
 # Ronin-Mini
 
-A minimal, standalone AI pentesting harness. Claude reasons step-by-step over
+A minimal, standalone AI pentesting harness. It is model agnostic, so any model reasons step-by-step over
 a target through a small, scoped set of tools, and every tool call is logged
 to an auditable transcript.
 
