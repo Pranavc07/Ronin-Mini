@@ -24,7 +24,7 @@ def register(mcp, scope, executor, timeouts: dict) -> None:
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}
         return executor.run_http(
-            method, url, headers, body, timeout=timeouts.get("http_request", DEFAULT_TIMEOUT_SECONDS)
+            method, url, headers, body, timeout=timeouts.get("http_request", DEFAULT_TIMEOUT_SECONDS), scope=scope
         )
 
     def dns_lookup(hostname: str) -> dict:

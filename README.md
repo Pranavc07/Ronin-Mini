@@ -366,10 +366,23 @@ is centralized and applies to every tool, network tools included:
 `code_search`/`file_read` resolve every path with `os.path.realpath` and
 reject anything outside `--scope-dir`; every network tool validates the
 target host against an allowlist (derived from `--target` by default)
-*before* touching the network. See
-[`tests/test_scope.py`](tests/test_scope.py) (unit) and
-[`tests/test_mcp_server.py`](tests/test_mcp_server.py) (end-to-end, through
-the real server).
+*before* touching the network — including every hop of an HTTP redirect,
+not just the initial URL (`executor.run_http` follows redirects manually,
+re-validating each destination; a target can't redirect an in-scope request
+out of scope). See [`tests/test_scope.py`](tests/test_scope.py) (unit),
+[`tests/test_redirect_scope.py`](tests/test_redirect_scope.py) (redirect
+validation), and [`tests/test_mcp_server.py`](tests/test_mcp_server.py)
+(end-to-end, through the real server).
+
+**Prompt-injection mitigation**: target-controlled content (tool output,
+and evidence text quoting target content) is wrapped with a fresh,
+unpredictable per-conversation token before it reaches the model
+(`agent_core.wrap_untrusted_data`), with an explicit "this is data, not
+instructions" notice — a random token, not a fixed delimiter, so a target
+response can't spoof the boundary by guessing it. This is a structural
+mitigation, not a guarantee against every injection technique; see
+[`tests/test_prompt_injection.py`](tests/test_prompt_injection.py) and
+`CLAUDE.md`'s prompt-injection section for the documented scope/limits.
 
 ## Testing
 

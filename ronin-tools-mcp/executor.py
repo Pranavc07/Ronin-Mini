@@ -7,10 +7,28 @@ from __future__ import annotations
 import os
 import subprocess
 import uuid
+from urllib.parse import urljoin, urlparse
 
 import requests
 
 MAX_OUTPUT_CHARS = 4000
+
+# Redirects are followed manually (allow_redirects=False on every actual
+# request) rather than letting requests.request follow them automatically,
+# so every hop's destination gets independently re-validated against scope
+# before it's followed -- a target can't redirect an in-scope request out of
+# scope. 5 is deliberately conservative: plenty for a legitimate same-app
+# redirect (http->https, a login redirect, a www redirect) while making a
+# redirect loop or an absurd chain fail fast rather than hang. Sanity-
+# checked against DVWA's actual login mechanic (POST /login.php -> a single
+# 302 to index.php on success) which is well within this -- not empirically
+# re-verified against a live DVWA instance in this pass (Docker wasn't
+# running), so treat this as reasoned, not measured, and re-check live if
+# a DVWA regression run ever burns budget specifically on redirect
+# rejection rather than the already-documented session/login limitation.
+MAX_REDIRECTS = 5
+_ALLOWED_REDIRECT_SCHEMES = {"http", "https"}
+_REDIRECT_STATUS_CODES = (301, 302, 303, 307, 308)
 
 DOCKER_IMAGE = "ronin-exploit-runtime"
 _DOCKERFILE_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "docker")
@@ -47,24 +65,78 @@ def run_http(
     headers: dict | None,
     body: str | None,
     timeout: int,
+    scope,
 ) -> dict:
-    try:
-        resp = requests.request(
-            method=(method or "GET").upper(),
-            url=url,
-            headers=headers or {},
-            data=body,
-            timeout=timeout,
-            allow_redirects=True,
-        )
-        return {
-            "status_code": resp.status_code,
-            "headers": dict(resp.headers),
-            "body": truncate(resp.text),
-            "final_url": resp.url,
-        }
-    except requests.exceptions.RequestException as e:
-        return {"error": f"{type(e).__name__}: {e}"}
+    """Send an HTTP request, following redirects manually rather than via
+    requests' own allow_redirects=True. Every hop -- including the first --
+    is independently re-validated against `scope.validate_host` (the SAME
+    check every other network tool uses, not a separate/weaker one) before
+    it's requested, so a target cannot redirect an in-scope request to an
+    out-of-scope host. Non-http(s) redirect targets (e.g. file://) are
+    rejected outright. A full record of every hop -- validated or rejected
+    -- is returned as "redirect_chain" so it's visible in the transcript.
+
+    This is scope enforcement (does the destination match the allowlist?),
+    not a general SSRF-proof network boundary -- it doesn't resolve DNS to
+    check for a rebinding attack against an *allowed* hostname, for example.
+    See CLAUDE.md's redirect-validation section for the documented scope.
+    """
+    chain: list[dict] = []
+    current_url = url
+    current_method = (method or "GET").upper()
+    current_body = body
+
+    for hop in range(MAX_REDIRECTS + 1):
+        parsed = urlparse(current_url)
+        if parsed.scheme not in _ALLOWED_REDIRECT_SCHEMES:
+            chain.append({"url": current_url, "allowed": False, "reason": f"unsupported scheme {parsed.scheme!r}"})
+            return {"error": f"Redirect to unsupported scheme {parsed.scheme!r}: {current_url}", "redirect_chain": chain}
+
+        try:
+            scope.validate_host(current_url)
+        except Exception as e:  # noqa: BLE001 -- ScopeError from scope.py, kept generic to not import it here
+            chain.append({"url": current_url, "allowed": False, "reason": str(e)})
+            return {"error": str(e), "redirect_chain": chain}
+
+        try:
+            resp = requests.request(
+                method=current_method,
+                url=current_url,
+                headers=headers or {},
+                data=current_body,
+                timeout=timeout,
+                allow_redirects=False,
+            )
+        except requests.exceptions.RequestException as e:
+            chain.append({"url": current_url, "allowed": True, "error": f"{type(e).__name__}: {e}"})
+            return {"error": f"{type(e).__name__}: {e}", "redirect_chain": chain}
+
+        chain.append({"url": current_url, "allowed": True, "status_code": resp.status_code})
+
+        location = resp.headers.get("Location") if resp.status_code in _REDIRECT_STATUS_CODES else None
+        if not location:
+            return {
+                "status_code": resp.status_code,
+                "headers": dict(resp.headers),
+                "body": truncate(resp.text),
+                "final_url": current_url,
+                "redirect_chain": chain,
+            }
+
+        if hop == MAX_REDIRECTS:
+            chain.append({"url": location, "allowed": False, "reason": f"exceeded max redirect count ({MAX_REDIRECTS})"})
+            return {"error": f"Exceeded max redirect count ({MAX_REDIRECTS})", "redirect_chain": chain}
+
+        # 303 always downgrades to GET; 301/302 downgrade a POST to GET too,
+        # matching requests' own default behavior for those codes when it
+        # follows redirects itself -- not a scope-specific choice, just
+        # preserving the same semantics now that this is done manually.
+        if resp.status_code == 303 or (resp.status_code in (301, 302) and current_method == "POST"):
+            current_method = "GET"
+            current_body = None
+        current_url = urljoin(current_url, location)
+
+    return {"error": "redirect loop guard exhausted", "redirect_chain": chain}  # unreachable given the loop bound
 
 
 def run_subprocess(args: list[str], timeout: int) -> dict:

@@ -5,6 +5,71 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-19 — Hardened two security gaps from a review: redirect scope bypass + prompt injection
+- User-driven security hardening pass, scoped explicitly to two items from a
+  broader review (persistence/CI/adversarial-suite/benchmarking tracked
+  separately, out of scope here).
+- **Redirect scope bypass**: `executor.run_http` let `requests` follow
+  redirects automatically -- the destination was never re-validated, so an
+  in-scope URL could redirect Ronin to an out-of-scope host. Fixed by
+  driving redirects manually (`allow_redirects=False` per real request),
+  calling `scope.validate_host` on every hop including the first,
+  `MAX_REDIRECTS = 5`, rejecting non-http(s) schemes, and recording every
+  hop (validated or rejected) in a `redirect_chain` field. Single
+  chokepoint -- `http_request`, `probe_variant`, and `replay_probe`
+  (via `run_probe_variant`) all funnel through this one function, fixed
+  once. Found and fixed a SECOND, independent copy of the identical bug in
+  `categories/exploit_runtime.py`'s `_HELPER_TEMPLATE` (the `ronin_target.py`
+  helper generated into every `execute_python` sandbox container, which
+  can't import the real `scope.py` since it runs in an isolated container)
+  -- extended with the same algorithm, returns a real `requests.Response`
+  with `.history` populated rather than breaking its documented interface.
+- **Prompt injection**: target-controlled content (tool output, and
+  `finding_evidence`/`claimed_evidence` interpolated directly into
+  exploit_agent's/verify_agent's system prompts) had no framing
+  distinguishing it from trusted instructions. Fixed with
+  `agent_core.new_injection_token()` (a fresh, unpredictable
+  `secrets.token_hex(16)` per agent conversation) and
+  `agent_core.wrap_untrusted_data()`, applied at `run_tool_loop`'s
+  tool-result construction (one chokepoint, covers all three agents and
+  every tool automatically) and at the two evidence-interpolation points
+  found while reading the actual prompts (not originally flagged, but the
+  same category of risk, arguably higher since it lands in the system
+  prompt itself). User specifically required a **random per-run token, not
+  a fixed delimiter** -- a static boundary string is guessable, letting an
+  adversarial response spoof a fake closing tag followed by fake
+  instructions; a token the target can't predict closes that specific
+  trick. All three role prompts + the legacy single-agent template carry a
+  matching paragraph announcing the real token so the model has a genuine
+  reference value.
+- Two things checked and found NOT to be live bugs, reported honestly
+  rather than silently "fixed": (1) whether `finding_evidence`/
+  `claimed_evidence` containing literal `{`/`}` could break `.format()` --
+  empirically verified it can't (`str.format()` does single-pass
+  substitution, doesn't re-scan substituted values for placeholders); (2)
+  whether `MAX_REDIRECTS = 5` could reintroduce the documented DVWA
+  session/login budget-burning issue -- reasoned through DVWA's actual
+  login mechanic (one 302 on successful POST) as very likely fine, but
+  Docker wasn't running this session so this is NOT a live-verified
+  regression check, flagged explicitly as reasoned-not-measured.
+- 63 new tests across two new files: `tests/test_redirect_scope.py` (25 --
+  out-of-scope HTTP/HTTPS redirects, relative/absolute/protocol-relative
+  redirects, chained redirects, redirect loops terminating via the cap,
+  disallowed schemes, malformed Location headers, IP-obfuscation bypass
+  attempts, both copies of the algorithm including the real registered
+  `http_request`/`probe_variant` closures, not just the underlying
+  function) and `tests/test_prompt_injection.py` (15 -- token
+  generation/uniqueness, wrapping content, the specific spoofed-boundary
+  scenario, real `run_tool_loop` integration proving injected tool output
+  is actually wrapped in what reaches the model, per-agent evidence
+  wrapping, the brace/`.format()` regression guard). Full suite: 200/201
+  pass (one pre-existing, unrelated `test_mcp_server_full_flow` failure,
+  same as every prior session).
+- NEXT: live DVWA regression check for the `MAX_REDIRECTS` sanity concern
+  once Docker/DVWA is up. No other follow-up from this pass -- both items
+  from the review are considered closed within their stated (and
+  documented) scope.
+
 ## 2026-08-19 — Completed all 10 stub skill files to `status: full`
 - User feedback: the skills directory was materially uneven — 6 of 16 files
   (`sqli`/`idor`/`xss`/`auth_bypass` from Phase 1, `known_vulnerable_service`/

@@ -41,7 +41,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def build_system_prompt(target: str, finding: dict, tool_defs: list[dict]) -> str:
+def build_system_prompt(target: str, finding: dict, tool_defs: list[dict], injection_token: str) -> str:
+    """claimed_evidence is exploit_agent's verdict text -- same category of
+    risk as exploit_agent's own finding_evidence (quoted target content
+    landing directly in a system prompt), wrapped with wrap_untrusted_data()
+    for the same reason. See exploit_agent/loop.py's build_system_prompt
+    docstring for why a value containing literal braces is safe to pass
+    through .format() regardless (single-pass substitution, not re-parsed).
+    """
     claimed = ""
     winning = [
         a for a in finding.get("exploit_attempts", [])
@@ -55,7 +62,8 @@ def build_system_prompt(target: str, finding: dict, tool_defs: list[dict]) -> st
         finding_id=finding["id"],
         finding_type=finding.get("type", ""),
         finding_target=finding.get("target", ""),
-        claimed_evidence=claimed,
+        claimed_evidence=agent_core.wrap_untrusted_data(claimed, injection_token),
+        injection_token=injection_token,
         verify_start=VERIFY_START,
         verify_end=VERIFY_END,
     )
@@ -79,7 +87,8 @@ async def _process_one_finding(
     hitl_mode: str = "auto",
     log_path: str | None = None,
 ) -> tuple[dict, str]:
-    system_prompt = build_system_prompt(target, finding, tool_defs)
+    injection_token = agent_core.new_injection_token()
+    system_prompt = build_system_prompt(target, finding, tool_defs, injection_token)
     initial_message = (
         f"Verify finding {finding['id']} ({finding.get('type')}) at {finding.get('target')} "
         f"by replaying its winning attempt. Call replay_probe with finding id "
@@ -98,6 +107,7 @@ async def _process_one_finding(
         max_iterations,
         max_minutes,
         max_tokens,
+        injection_token=injection_token,
         extract_markers=(VERIFY_START, VERIFY_END),
         hitl_mode=hitl_mode,
         label=label,

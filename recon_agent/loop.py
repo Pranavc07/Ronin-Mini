@@ -23,7 +23,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def build_system_prompt(target: str, objective: str, tool_defs: list[dict]) -> str:
+def build_system_prompt(target: str, objective: str, tool_defs: list[dict], injection_token: str) -> str:
     # Role prompt lives in agents/recon.md now (loaded as a format() template).
     return agent_core.load_agent_prompt("recon").format(
         target=target,
@@ -31,6 +31,7 @@ def build_system_prompt(target: str, objective: str, tool_defs: list[dict]) -> s
         tool_schemas=json.dumps(tool_defs, indent=2),
         finding_start=agent_core.FINDING_START,
         finding_end=agent_core.FINDING_END,
+        injection_token=injection_token,
     )
 
 
@@ -69,7 +70,8 @@ async def run_recon_agent(
             )
             tool_defs = agent_core.mcp_tools_to_anthropic_schema(allowed_tools)
 
-            system_prompt = build_system_prompt(target, objective, tool_defs)
+            injection_token = agent_core.new_injection_token()
+            system_prompt = build_system_prompt(target, objective, tool_defs, injection_token)
             initial_message = f"Begin reconnaissance against {target}. Objective: {objective}"
 
             result = await agent_core.run_tool_loop(
@@ -86,6 +88,7 @@ async def run_recon_agent(
                 hitl_mode=hitl_mode,
                 label="recon",
                 log_path=log_path,
+                injection_token=injection_token,
             )
 
     findings = []
