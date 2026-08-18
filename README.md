@@ -1,8 +1,14 @@
 # Ronin-Mini
 
-A minimal, standalone AI pentesting harness. It is model agnostic, so any model reasons step-by-step over
-a target through a small, scoped set of tools, and every tool call is logged
-to an auditable transcript.
+Source-available under **BSL 1.1** — free for almost any use (including
+commercial), converts automatically to Apache 2.0 on 2030-08-18. See
+[LICENSE](LICENSE) for the exact terms, or [What the license means in
+practice](#what-the-license-means-in-practice) below for the plain-language
+version.
+
+A minimal, standalone AI pentesting harness. It is model agnostic, so any
+model reasons step-by-step over a target through a small, scoped set of
+tools, and every tool call is logged to an auditable transcript.
 
 This is deliberately a **thin harness**, not a framework: files instead of a
 database, sequential agent loops instead of a scheduler, no message queue, no
@@ -39,6 +45,34 @@ model-agnostic adapter (`models/`), never to a provider SDK directly.
 > infrastructure). Unauthorized scanning or exploitation of systems you do
 > not own or have permission to test is illegal in most jurisdictions. You
 > are responsible for how you use this tool.
+
+---
+
+## What the license means in practice
+
+Ronin-Mini is licensed under the [Business Source License 1.1](LICENSE), not
+MIT or Apache — here's what that actually means if you're reading this repo:
+
+- **You can clone it, read every line, run it, modify it, and fork it.**
+  Nothing about the source is hidden or restricted from inspection.
+- **You can use it for your own security work** — run it against your own
+  systems, use it as part of a paid client engagement you deliver yourself,
+  build on it for internal tooling, include it in a portfolio, whatever.
+  That's all covered as ordinary use, commercial or not.
+- **You can contribute** — PRs, forks, modifications are all fine under this
+  license.
+- **The one thing you can't do**: stand up Ronin (or something substantially
+  similar to it) as a hosted, managed, or as-a-service product and sell
+  access to *it* to third parties — i.e. don't turn this into a competing
+  pentesting-as-a-service platform without a commercial license from me.
+  Using Ronin as a tool to deliver your own separately-branded consulting or
+  pentest engagements is not what this restricts.
+- **It's temporary**: on 2030-08-18, this specific restriction lapses
+  automatically and the code becomes available under the fully permissive
+  Apache License 2.0.
+
+This isn't legal advice — read [LICENSE](LICENSE) for the actual terms if
+your use case is anywhere near the line.
 
 ---
 
@@ -87,7 +121,15 @@ model-agnostic adapter (`models/`), never to a provider SDK directly.
   `main.py`/`run.py` print token counts and an estimated dollar cost after
   each stage, via a static pricing table (`models/pricing.py`) — treat the
   dollar figure as an approximate, same-session ballpark, not authoritative
-  billing; check `console.anthropic.com` for real spend.
+  billing; check your provider's real billing dashboard for real spend.
+- **Real-time live logging** — every model reasoning turn and every tool
+  call/result prints immediately as it happens (prefixed `[recon]`,
+  `[exploit:f3]`, `[verify:f9]`, etc. — a terminal watching the whole
+  pipeline can tell which stage/finding a line belongs to), and the same
+  events get appended to a JSONL log file (`logs/run_<target>_<timestamp>.jsonl`
+  by default, override with `--log-path`) for a persistent, replayable
+  record of the whole run — including recon's own reasoning, which used to
+  be discarded entirely once recon returned only its extracted findings.
 
 ## Setup
 
@@ -137,6 +179,7 @@ python main.py \
 | `--provider` | no | `anthropic` | Model provider adapter (see `models/__init__.py`) |
 | `--hitl-mode` | no | `auto` | `auto` \| `manual` \| `plan` — see HITL section above |
 | `--output-dir` | no | `.` | Where to write the transcript JSON file |
+| `--log-path` | no | auto (`logs/run_<target>_<timestamp>.jsonl`) | Live JSONL log of every reasoning turn + tool call/result |
 
 ## Three-agent mode (recon → exploit → verify)
 
@@ -162,6 +205,7 @@ python run.py \
 | `--model` | no | `claude-sonnet-4-6` | Model ID |
 | `--provider` | no | `anthropic` | Model provider adapter |
 | `--hitl-mode` | no | `auto` | `auto` \| `manual` \| `plan` |
+| `--log-path` | no | auto (`logs/run_<target>_<timestamp>.jsonl`) | Live JSONL log across all three stages |
 
 Recon's budget is the ceiling on how much of the target actually gets
 explored — a narrow budget with a broad target (many open services) will cut

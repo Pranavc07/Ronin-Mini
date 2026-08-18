@@ -5,6 +5,83 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-18 — Switched license from MIT to BSL 1.1
+- User decision, not a code change: source stays fully visible and free to
+  clone/run/modify/fork/use for almost any purpose (including commercial),
+  with one carve-out -- can't offer Ronin, or a substantially similar
+  derivative, as a hosted/managed/as-a-service pentesting product to third
+  parties without a commercial license. Converts automatically to Apache
+  License 2.0 on the Change Date, 2030-08-18 (4 years from today). Goal:
+  keep the project genuinely open for use/contribution/portfolio visibility
+  during the job search while protecting the option to commercialize later.
+- Fetched the actual canonical BSL 1.1 template text (cross-verified against
+  both mariadb.com/bsl11 -- the license's origin -- and CockroachDB's real
+  BSL adoption on GitHub, word-for-word identical on the Terms/Covenants/
+  Notice sections) rather than reconstructing it from memory, given how hard
+  licensing mistakes are to undo. Filled in the Parameters block only
+  (Licensor, Licensed Work, Additional Use Grant, Change Date, Change
+  License) -- the operative legal text is untouched boilerplate.
+- Flagged one real ambiguity in the user-provided Additional Use Grant
+  wording: "offer... as a hosted, managed, or otherwise as-a-service
+  penetration-testing product or service" could, read strictly, arguably
+  sweep in a consultant using Ronin as an internal tool to deliver a paid
+  pentest engagement (which is explicitly meant to be allowed) versus
+  actually SaaS-ifying Ronin itself and reselling access to it (the actual
+  target). User's call on whether to tighten the wording. Also noted (not
+  blocking, industry-standard practice per CockroachDB/Sentry/Materialize
+  all doing the same): BSL 1.1's own Covenant #1 nominally asks for a
+  GPLv2-compatible Change License, and Apache 2.0 is technically not
+  GPLv2-compatible -- a well-known, widely-ignored tension in real BSL
+  adoptions, not something enforced against the Licensor.
+- Updated `README.md` (BSL badge/note under the title + a full plain-language
+  "What the license means in practice" section) and `CLAUDE.md`. No code,
+  architecture, or functionality changed.
+- NEXT: user should confirm the Additional Use Grant wording as-is or adopt
+  the tightening suggested above, and confirm the commercial-licensing
+  contact email in `LICENSE` (used `pranavc6969@gmail.com` on file, not
+  separately confirmed for this purpose).
+
+## 2026-08-18 — Real-time live logging across the whole pipeline
+- User request, directly motivated by pain hit repeatedly this session:
+  every agent call was silent until its stage finished, so watching a
+  long-running Metasploitable sweep gave zero signal on whether it was
+  progressing or actually stuck (came up multiple times with the GLM/Qwen
+  runs -- had to manually diff terminal scrollback and log-file timestamps
+  each time to tell). Also closes a documented gap from 2026-08-16's
+  progress entry: recon's own reasoning/tool-call transcript was discarded
+  entirely once `run_recon_agent` returned only its extracted findings --
+  no way to inspect *how* recon reached a given finding count after the
+  fact.
+- `agent_core.run_tool_loop` gained `label` (prefixes every printed line --
+  `"recon"`, `"exploit:f3"`, `"verify:f9"`) and `log_path` (optional).
+  Every model turn's reasoning text and every tool call/result now print
+  immediately, flushed, truncated for the terminal (`_short`) but logged
+  untruncated. `log_path`, if set, gets the same events appended as JSON
+  lines (`_append_log`, opened/closed per write so a crash mid-run still
+  leaves a complete partial log). `agent_core.new_run_log_path(target)`
+  generates the default path (`logs/run_<slugified-target>_<timestamp>.jsonl`);
+  `run.py`/`main.py` create one per invocation and thread it through every
+  stage, so a full recon->exploit->verify run lands in one chronological
+  file -- overridable via the new `--log-path` flag on both entry points.
+- Small cleanups along the way: `agent_core.slugify()` now shared by
+  `run.py`/`main.py`/`new_run_log_path` (was duplicated in `main.py` only,
+  `run.py` had no filename-generation need until this); fixed the
+  `[total] estimated cost` line's hardcoded "verify against
+  console.anthropic.com billing" to name the right dashboard for whichever
+  `--provider` actually ran (flagged during the Qwen-run findings review,
+  fixed here since it was a two-line change adjacent to what was already
+  being touched).
+- 13 new unit tests (`tests/test_live_logging.py`): `_short` truncation,
+  `_append_log` no-op/write behavior, live-print output for reasoning/tool
+  calls/errors (with and without a label), JSONL persistence content and
+  opt-in-ness, `slugify`/`new_run_log_path`. 158/159 tests pass (same
+  pre-existing unrelated `test_mcp_server_full_flow` failure).
+- NEXT: not live-tested yet against a real multi-stage run (only a scripted
+  adapter + a manual one-off script confirming the print/log format looks
+  right). Next live Metasploitable run (whichever provider) will be the
+  first real end-to-end check that this holds up across recon -> exploit ->
+  verify without excessive terminal noise at real tool-call volumes.
+
 ## 2026-08-17 — Fixed replay_probe crashing on non-Anthropic tool-call types
 - First live run against a non-Anthropic provider (Qwen3.6 Plus via
   OpenRouter, `--provider openrouter`) against real Metasploitable, using

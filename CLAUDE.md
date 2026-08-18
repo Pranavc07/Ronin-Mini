@@ -4,6 +4,24 @@ Minimal AI pentesting harness. Published: github.com/Pranavc07/Ronin-Mini.
 Read this + `docs/progress.md` + `docs/roadmap.md` at session start instead of
 re-exploring.
 
+## License: BSL 1.1, not MIT (changed 2026-08-18)
+
+Switched from MIT to the [Business Source License 1.1](LICENSE) — source
+stays fully visible, free to clone/run/modify/fork/use commercially for
+almost any purpose, with one carve-out: no offering Ronin (or a
+substantially similar derivative) as a hosted/managed/as-a-service
+pentesting product to third parties without a commercial license from the
+Licensor. Converts automatically to Apache License 2.0 on the Change Date,
+2030-08-18 (4 years out). Reasoning: protects the option to commercialize
+this later without giving up genuine openness for use, contribution, and
+portfolio visibility during a job search — the thing actually restricted is
+narrow (reselling the harness itself as SaaS), not general use. `README.md`
+has a plain-language explanation of what this means for someone reading the
+repo; `LICENSE` has the actual filled-in BSL 1.1 template (Licensor,
+Licensed Work, Additional Use Grant, Change Date, Change License) — don't
+touch the Terms/Covenants/Notice boilerplate text if this ever needs
+updating, only the Parameters block values are project-specific.
+
 ## Two ways to run it
 
 - **Single-agent** (`main.py` → `loop.py`): one agent, all tools. The original
@@ -74,10 +92,45 @@ not a live lookup, since Anthropic doesn't expose a pricing API — with a
 Sonnet-tier fallback for any model id not in the table. `run.py` prints
 per-stage (`[recon]`/`[exploit]`/`[verify]`) and total token counts + cost
 after each stage; `main.py` prints the same for the single-agent loop. Every
-printed cost line is explicitly labeled approximate and points to
-`console.anthropic.com`'s billing dashboard as the authoritative source —
-this exists to give a same-session ballpark, not to replace real billing
-data.
+printed cost line is explicitly labeled approximate and names the right
+billing dashboard for whichever `--provider` actually ran (Anthropic's
+console for `anthropic`, a generic "your provider's dashboard" pointer
+otherwise) — this exists to give a same-session ballpark, not to replace
+real billing data.
+
+## Real-time live logging (`label`/`log_path` on `run_tool_loop`)
+
+Every agent call used to be silent until its stage finished — no visibility
+into whether a run was progressing or hung, which became a real problem
+live-testing slower/non-Anthropic providers (no way to tell "still thinking"
+from "actually stuck" without external tooling). `run_tool_loop` now takes
+`label` (a short string prefixing every printed line, e.g. `"recon"`,
+`"exploit:f3"`, `"verify:f9"` — lets a terminal watching the whole
+recon→exploit→verify pipeline tell which stage/finding a line belongs to)
+and `log_path` (optional). On every model turn, the reasoning text prints
+immediately (flushed, truncated for the terminal via `_short`); on every
+tool call, the call and its result print immediately too, tagged `[ok]` or
+`[ERROR]`. If `log_path` is set, the same events — untruncated — are
+appended as JSON lines (`_append_log`, opened/closed per write so a run that
+crashes mid-way still leaves everything up to that point on disk) to a
+persistent record of the whole run.
+
+`agent_core.new_run_log_path(target)` generates the default path
+(`logs/run_<slugified-target>_<timestamp>.jsonl`, `logs/` already
+gitignored); `run.py`/`main.py` create one log path per invocation and
+thread it through every stage, so recon/exploit/verify (or the single-agent
+loop) all land in one chronological file — overridable via `--log-path`.
+This also closes a real gap: recon's own reasoning/tool-call transcript was
+previously discarded entirely once `run_recon_agent` returned only its
+extracted findings (`docs/progress.md`'s 2026-08-16 entry noted this — no
+way to tell whether a run's finding count reflected budget exhaustion or a
+deliberate stop without re-deriving it from stdout that was never saved).
+It's now captured in `log_path` regardless.
+
+`agent_core.slugify()` is shared by `run.py`, `main.py`, and
+`new_run_log_path` — previously duplicated between `main.py`'s own copy and
+(implicitly) nowhere else, since `run.py` had no filename-generation need
+until this.
 
 ## HITL approval gate — three modes, `hitl_mode`, default `auto`
 
