@@ -44,6 +44,50 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def slugify(value: str) -> str:
+    value = re.sub(r"^https?://", "", value)
+    value = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-")
+    return value[:60] or "target"
+
+
+def new_run_log_path(target: str, logs_dir: str = "logs") -> str:
+    """A fresh, timestamped path for this run's live JSONL log (see
+    run_tool_loop's label/log_path params) -- one file for the whole
+    recon->exploit->verify pipeline, or a single-agent run.
+    """
+    os.makedirs(logs_dir, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return os.path.join(logs_dir, f"run_{slugify(target)}_{timestamp}.jsonl")
+
+
+def _short(text: str, limit: int) -> str:
+    """Collapse to one line and truncate for terminal-friendly live output.
+    Full, untruncated content still goes to the JSONL log via _append_log.
+    """
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... [+{len(text) - limit} chars]"
+
+
+def _live_print(label: str, message: str) -> None:
+    prefix = f"[{label}] " if label else ""
+    print(f"{prefix}{message}", flush=True)
+
+
+def _append_log(log_path: str | None, event: dict) -> None:
+    """Append one JSON line to the run's live log file, if one is configured.
+    Opened/closed per call rather than holding a shared handle open across
+    the whole (possibly hours-long, multi-stage) run -- simpler lifecycle,
+    negligible overhead at the volumes a single run produces, and a run that
+    crashes mid-way still leaves every event up to that point on disk.
+    """
+    if not log_path:
+        return
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event, default=str) + "\n")
+
+
 def load_agent_prompt(name: str) -> str:
     """Load a role prompt from agents/{name}.md. This is a format() template --
     callers fill {target}, {tool_schemas}, etc. exactly as the old hardcoded
@@ -270,6 +314,8 @@ async def run_tool_loop(
     max_tokens: int = 4096,
     extract_markers: tuple[str, str] | None = None,
     hitl_mode: str = "manual",
+    label: str = "",
+    log_path: str | None = None,
 ) -> dict:
     """Run one model<->tool conversation until the model stops calling tools
     or a cap is hit. This is the mechanics every agent in this repo shares --
@@ -282,6 +328,16 @@ async def run_tool_loop(
       - "plan": one confirm_plan_for_run() prompt before the first gated call
         this run makes; that decision governs every gated call for the rest
         of this run_tool_loop invocation (one finding, for exploit/verify).
+
+    label prefixes every live-printed line (e.g. "recon", "exploit:f3") so a
+    terminal watching the whole recon->exploit->verify pipeline can tell
+    which stage/finding a line belongs to. Every model turn's reasoning text
+    and every tool call/result prints immediately (flushed) as it happens --
+    this is what makes a run's progress visible in real time instead of
+    going silent until the stage finishes. log_path, if given, gets the same
+    events appended as JSON lines (one per event) for a persistent, replayable
+    record of the whole run, including recon's own reasoning -- previously
+    discarded once recon returned only its extracted findings.
 
     Returns {transcript, extracted_blocks, tool_call_count, stop_reason, usage}.
     extracted_blocks is populated only if extract_markers is given. usage is
@@ -314,6 +370,12 @@ async def run_tool_loop(
         total_usage = total_usage + response.usage
 
         assistant_text = response.text
+        if assistant_text.strip():
+            _live_print(label, f"reasoning: {_short(assistant_text, 400)}")
+            _append_log(
+                log_path,
+                {"timestamp": _now_iso(), "label": label, "type": "reasoning", "text": assistant_text},
+            )
         if extract_markers:
             extracted_blocks.extend(extract_blocks(assistant_text, *extract_markers))
 
@@ -337,6 +399,7 @@ async def run_tool_loop(
 
             tool_call_count += 1
             call_started = _now_iso()
+            _live_print(label, f"-> {call.name}({_short(json.dumps(call.input, default=str), 200)})")
 
             if hitl_mode == "auto":
                 approved, final_input = True, call.input
@@ -356,6 +419,21 @@ async def run_tool_loop(
                 is_error = True
             else:
                 output, is_error = await execute_tool(session, call.name, final_input)
+
+            status = "ERROR" if is_error else "ok"
+            _live_print(label, f"<- {call.name} [{status}]: {_short(json.dumps(output, default=str), 250)}")
+            _append_log(
+                log_path,
+                {
+                    "timestamp": call_started,
+                    "label": label,
+                    "type": "tool_call",
+                    "tool": call.name,
+                    "input": final_input,
+                    "output": output,
+                    "is_error": is_error,
+                },
+            )
 
             transcript.append(
                 {

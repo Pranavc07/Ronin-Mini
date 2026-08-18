@@ -13,6 +13,7 @@ import asyncio
 import os
 import sys
 
+import agent_core
 from exploit_agent.loop import run_exploit_agent
 from models import estimate_cost_usd, sum_usage
 from recon_agent.loop import run_recon_agent
@@ -62,6 +63,15 @@ def parse_args() -> argparse.Namespace:
             "decision to every gated call after. Default: auto."
         ),
     )
+    parser.add_argument(
+        "--log-path",
+        default=None,
+        help=(
+            "Where to write the full pipeline's live JSONL log (every model reasoning "
+            "turn + tool call/result, across recon/exploit/verify). Default: auto-"
+            "generated under logs/ as run_<target>_<timestamp>.jsonl."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -73,6 +83,9 @@ async def main_async(args: argparse.Namespace) -> int:
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("warning: ANTHROPIC_API_KEY is not set; the Anthropic SDK will fail to authenticate.", file=sys.stderr)
+
+    log_path = args.log_path or agent_core.new_run_log_path(args.target)
+    print(f"[+] Live pipeline log: {log_path}")
 
     print(f"[recon] target={args.target}")
     print(f"[recon] objective={args.objective!r}")
@@ -86,6 +99,7 @@ async def main_async(args: argparse.Namespace) -> int:
         findings_path=args.findings_path,
         max_iterations=args.recon_max_iterations,
         max_minutes=args.recon_max_minutes,
+        log_path=log_path,
     )
     meta = recon_result["metadata"]
     print(
@@ -109,6 +123,7 @@ async def main_async(args: argparse.Namespace) -> int:
         hitl_mode=args.hitl_mode,
         per_finding_max_iterations=args.exploit_per_finding_max_iterations,
         per_finding_max_minutes=args.exploit_per_finding_max_minutes,
+        log_path=log_path,
     )
     print(f"[exploit] processed {exploit_result['processed']}/{exploit_result['total_findings']} findings")
     exploit_cost = estimate_cost_usd(args.model, exploit_result["usage"])
@@ -124,6 +139,7 @@ async def main_async(args: argparse.Namespace) -> int:
         hitl_mode=args.hitl_mode,
         per_finding_max_iterations=args.verify_per_finding_max_iterations,
         per_finding_max_minutes=args.verify_per_finding_max_minutes,
+        log_path=log_path,
     )
     print(f"[verify] verified {verify_result['processed']} exploited finding(s)")
     verify_cost = estimate_cost_usd(args.model, verify_result["usage"])
@@ -132,8 +148,10 @@ async def main_async(args: argparse.Namespace) -> int:
 
     total_usage = sum_usage(meta["usage"], exploit_result["usage"], verify_result["usage"])
     total_cost = recon_cost + exploit_cost + verify_cost
+    billing_dashboard = {"anthropic": "console.anthropic.com"}.get(args.provider, f"your {args.provider} provider's dashboard")
     print(f"\n[total] tokens: {_fmt_usage(total_usage)}")
-    print(f"[total] estimated cost: ${total_cost:.4f} (model={args.model}; approximate -- verify against console.anthropic.com billing)")
+    print(f"[total] estimated cost: ${total_cost:.4f} (model={args.model}; approximate -- verify against {billing_dashboard})")
+    print(f"[total] full pipeline log: {log_path}")
     return 0
 
 

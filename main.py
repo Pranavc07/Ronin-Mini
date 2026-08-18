@@ -13,20 +13,14 @@ import argparse
 import asyncio
 import json
 import os
-import re
 import sys
 from datetime import datetime, timezone
 
+import agent_core
 from loop import run_agent
 from models import estimate_cost_usd
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
-
-
-def slugify(value: str) -> str:
-    value = re.sub(r"^https?://", "", value)
-    value = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-")
-    return value[:60] or "target"
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +62,15 @@ def parse_args() -> argparse.Namespace:
         default=".",
         help="Directory to write the transcript JSON file to (default: current directory)",
     )
+    parser.add_argument(
+        "--log-path",
+        default=None,
+        help=(
+            "Where to write the live JSONL log (every model reasoning turn + tool "
+            "call/result). Default: auto-generated under logs/ as "
+            "run_<target>_<timestamp>.jsonl."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -89,6 +92,8 @@ def main() -> int:
     print(f"[+] Model:       {args.model}")
     print(f"[+] HITL mode:   {args.hitl_mode}")
     print(f"[+] Max iters:   {args.max_iterations}   Max minutes: {args.max_minutes}")
+    log_path = args.log_path or agent_core.new_run_log_path(args.target)
+    print(f"[+] Live log:    {log_path}")
     print("[+] Starting agent loop...\n")
 
     result = asyncio.run(
@@ -101,11 +106,12 @@ def main() -> int:
             hitl_mode=args.hitl_mode,
             max_iterations=args.max_iterations,
             max_minutes=args.max_minutes,
+            log_path=log_path,
         )
     )
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    filename = f"transcript_{slugify(args.target)}_{timestamp}.json"
+    filename = f"transcript_{agent_core.slugify(args.target)}_{timestamp}.json"
     output_path = os.path.join(args.output_dir, filename)
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -121,8 +127,10 @@ def main() -> int:
         f"[+] Tokens: input={usage['input_tokens']} output={usage['output_tokens']} "
         f"cache_write={usage['cache_creation_input_tokens']} cache_read={usage['cache_read_input_tokens']}"
     )
-    print(f"[+] Estimated cost: ${cost:.4f} (approximate -- verify against console.anthropic.com billing)")
+    billing_dashboard = {"anthropic": "console.anthropic.com"}.get(args.provider, f"your {args.provider} provider's dashboard")
+    print(f"[+] Estimated cost: ${cost:.4f} (approximate -- verify against {billing_dashboard})")
     print(f"[+] Transcript written to: {output_path}")
+    print(f"[+] Live log written to: {log_path}")
 
     return 0
 

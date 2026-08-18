@@ -77,6 +77,7 @@ async def _process_one_finding(
     max_minutes: float,
     max_tokens: int,
     hitl_mode: str = "auto",
+    log_path: str | None = None,
 ) -> tuple[dict, str]:
     system_prompt = build_system_prompt(target, finding, tool_defs)
     initial_message = (
@@ -84,6 +85,8 @@ async def _process_one_finding(
         f"by replaying its winning attempt. Call replay_probe with finding id "
         f"\"{finding['id']}\", then judge whether the claimed exploitation reproduces."
     )
+    label = f"verify:{finding['id']}"
+    print(f"[{label}] verifying -- {finding.get('type')} at {finding.get('target')}", flush=True)
 
     result = await agent_core.run_tool_loop(
         model_adapter,
@@ -97,6 +100,8 @@ async def _process_one_finding(
         max_tokens,
         extract_markers=(VERIFY_START, VERIFY_END),
         hitl_mode=hitl_mode,
+        label=label,
+        log_path=log_path,
     )
 
     verdicts = [b for b in result["extracted_blocks"] if b.get("status") in ("verified", "false_positive", "unverifiable")]
@@ -137,6 +142,7 @@ async def run_verify_agent(
     per_finding_max_minutes: float = 5.0,
     max_tokens: int = 4096,
     allowed_hosts: list[str] | None = None,
+    log_path: str | None = None,
 ) -> dict:
     if allowed_hosts is None:
         allowed_hosts = [urlparse(target).hostname or target]
@@ -179,6 +185,7 @@ async def run_verify_agent(
                     per_finding_max_minutes,
                     max_tokens,
                     hitl_mode=hitl_mode,
+                    log_path=log_path,
                 )
                 finding.setdefault("verify_attempts", []).append(attempt)
                 finding["status"] = outcome_status

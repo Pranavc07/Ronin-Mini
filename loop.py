@@ -72,6 +72,7 @@ async def run_agent(
     max_minutes: float = 20.0,
     max_tokens: int = 4096,
     allowed_hosts: list[str] | None = None,
+    log_path: str | None = None,
 ) -> dict:
     if allowed_hosts is None:
         allowed_hosts = [urlparse(target).hostname or target]
@@ -102,6 +103,8 @@ async def run_agent(
                 max_tokens,
                 extract_markers=(agent_core.FINDING_START, agent_core.FINDING_END),
                 hitl_mode=hitl_mode,
+                label="agent",
+                log_path=log_path,
             )
 
     ended_at = _now_iso()
