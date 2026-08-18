@@ -16,7 +16,7 @@ Juice Shop/DVWA only exercise web-layer skills — network/service-layer and out
 
 **Web-layer, beyond Juice Shop/DVWA (skill generalization + coverage)**
 - **WebGoat** (OWASP) — cross-check that a skill file generalizes rather than being tuned to Juice Shop's specific quirks.
-- **bWAPP** — 100+ bug classes, good for testing the less-fleshed-out skill stubs (xxe, ssti, deserialization) that Juice Shop/DVWA don't cover deeply.
+- **bWAPP** — 100+ bug classes, good for cross-checking skill generalization on classes Juice Shop/DVWA don't cover deeply (xxe, ssti, deserialization — all now `status: full`, but never live-tested against a real target for those specific classes).
 - **PortSwigger Web Security Academy** — free, isolated labs per vulnerability class with a clear "solved" signal. Closest thing to unit tests for the skills directory — especially valuable for Phase 4's blind SSRF/XXE labs (purpose-built for out-of-band testing).
 
 **API-specific (gap none of the above cover)**
@@ -81,7 +81,7 @@ tools have grown provider-specific assumptions):
 **Status: shipped, live-tested end-to-end against Juice Shop (2026-08-10) — all 6 findings reached `verified` with matching original-vs-replay evidence**
 **Test against: Juice Shop, cross-check on WebGoat or bWAPP**
 
-- `agents/*.md` (role prompts), `skills/*.md` (14 web vuln classes, 4 fully written: sqli, idor, xss, auth_bypass — rest stubbed).
+- `agents/*.md` (role prompts), `skills/*.md` (14 web vuln classes, 4 fully written at the time: sqli, idor, xss, auth_bypass — rest stubbed; all 10 remaining stubs later completed 2026-08-19, see `docs/progress.md`).
 - `verify_agent`: read-only on findings.json + `replay_probe` tool, confirms or flags `false_positive` on `exploited` findings.
 - `run.py`: recon → exploit → verify, sequential.
 
@@ -100,7 +100,8 @@ tools have grown provider-specific assumptions):
   ATT&CK data (`ronin-tools-mcp/data/attack_enterprise_slim.json` — no live
   API/network dependency at runtime).
 - `exploit_agent` gets `attack_reference` added to its allowlist. When a
-  finding's skill is only a `stub` (10 of the 14 today), the prompt nudges it
+  finding's skill is only a `stub` (10 of the 14 at the time this phase
+  shipped; all later completed to `status: full`, 2026-08-19), the prompt nudges it
   to call `lookup_attack_technique` and derive its own approach from the
   returned technique description, instead of guessing from nothing. Skills
   with `status: full` behave exactly as before — this is a fallback, not a

@@ -5,6 +5,69 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-19 — Completed all 10 stub skill files to `status: full`
+- User feedback: the skills directory was materially uneven — 6 of 16 files
+  (`sqli`/`idor`/`xss`/`auth_bypass` from Phase 1, `known_vulnerable_service`/
+  `weak_credentials` from Phase 2) had real, hand-authored testing
+  methodology; the other 10 were `status: stub` — a one-paragraph
+  definition plus a generic "call `lookup_attack_technique` and use
+  `execute_python`" fallback, no actual technique guidance. User wanted all
+  10 brought up to the same bar.
+- Discussed and declined grouping skills into `skills/web/`/`skills/network/`
+  subfolders in the same pass — at today's 12:2 web:network ratio it doesn't
+  meaningfully improve on a flat 14-file directory, and would need either a
+  recursive glob in `agent_core.load_skill()` (fine, but unneeded right now)
+  or a hand-maintained finding-type→folder map (the drift-prone pattern
+  this codebase already hit and fixed twice this session, with
+  `REPLAYABLE_TOOLS` and the manifest `replayable` field). Revisit once a
+  third category actually exists.
+- Wrote real methodology for all 10 (`command_injection`, `path_traversal`,
+  `csrf`, `ssrf`, `xxe`, `ssti`, `deserialization`, `file_upload`,
+  `security_misconfig`, `business_logic`), matching the established
+  template exactly: framing paragraph, numbered "what to check, in order"
+  steps with concrete payloads/signals (not generic advice), "response
+  signatures" split into real-finding vs false-positive bullets, and a
+  "tooling" section mapping steps to `probe_variant` vs `execute_python`.
+  Each genuinely differs in technique -- e.g. `ssrf`/`xxe` both explicitly
+  flag blind/out-of-band variants as unconfirmable with current tooling
+  (no Collaborator-style callback infra until Phase 4) rather than
+  pretending the skill covers them; `ssti` scopes itself to
+  detection+math-confirmation and explicitly defers gadget-chain RCE
+  escalation as engine-specific and out of depth; `deserialization` leans
+  on error-differential signatures (malformed vs non-serialized garbage)
+  since generic gadget-chain construction isn't something `execute_python`
+  can do from scratch; `business_logic` uses a scenario checklist instead
+  of a single technique (negative-quantity, workflow-skip, coupon abuse,
+  race conditions) since it's inherently app-specific — kept `cwe`/
+  `attack_technique`/`attack_tactic` as `null`, unchanged from the original
+  stub's own reasoning, now just backed by real methodology instead of a
+  fallback note.
+- Fixed one now-stale test caught by the full suite:
+  `test_attack_reference.py::test_load_skill_stub_status_parses_frontmatter`
+  hardcoded `ssrf` as an example stub file, which broke the moment `ssrf`
+  became `full`. Rewrote it against a synthetic tmp-dir stub file
+  (`monkeypatch.setattr(agent_core, "SKILLS_DIR", ...)`) so the stub-parsing
+  code path (still real, exploit_agent's prompt still nudges toward
+  `lookup_attack_technique` for any future `stub` skill) stays tested
+  without depending on any specific shipped file staying a stub. Added two
+  new regression tests: one confirming `ssrf` specifically now carries real
+  methodology, one confirming *all* 16 shipped skills are `status: full`
+  with no leftover "No hand-authored methodology yet" text (the
+  `business_logic` `cwe: null` exception excluded from the CWE-presence
+  check, everything else must have one).
+- `CLAUDE.md`/`README.md`/`docs/roadmap.md` updated — roadmap.md's
+  historical Phase 1/1.5 status blocks kept as-is (accurate for what was
+  true when those phases shipped) with forward-pointer notes added rather
+  than rewritten, consistent with treating it as a running log.
+- 160/161 tests pass (same pre-existing, unrelated `test_mcp_server_full_flow`
+  failure). No code/architecture changes — content + one test fix only.
+- NEXT: none of the 10 newly-full skills have been live-tested against a
+  real target yet (the original 4 were validated against Juice Shop/DVWA
+  live runs before being marked full; these 10 were authored to the same
+  template/rigor but not yet exercised end-to-end). Worth a live check
+  next time a target surfaces findings in these classes — bWAPP is
+  specifically suited for xxe/ssti/deserialization per `docs/roadmap.md`.
+
 ## 2026-08-18 — Switched license from MIT to BSL 1.1
 - User decision, not a code change: source stays fully visible and free to
   clone/run/modify/fork/use for almost any purpose (including commercial),

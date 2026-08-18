@@ -175,11 +175,24 @@ to, same as any other tool error.
   block (`status: full|stub`, `cwe`, `attack_technique`, `attack_tactic`)
   parsed by `agent_core.load_skill()` into a `SkillDoc(metadata, body)`.
   exploit_agent appends `body` AFTER formatting (as a literal string, so
-  skills may contain braces/payloads freely). `sqli/idor/xss/auth_bypass` are
-  `status: full`; the other 10 are `status: stub` — a finding type with no
-  matching file at all → `load_skill` returns `None` (explicit fallback,
-  `skill_loaded=None`, distinct from a `stub` file that exists but has no
-  real methodology yet).
+  skills may contain braces/payloads freely). All 16 shipped skill files
+  are `status: full` as of 2026-08-19 — the original 4 (`sqli`/`idor`/`xss`/
+  `auth_bypass`) plus `known_vulnerable_service`/`weak_credentials` (Phase 2)
+  and the remaining 10 that used to be `status: stub` (generic one-paragraph
+  definition + a nudge toward `lookup_attack_technique`, no real testing
+  methodology) — all now carry the same real "what to check, in order /
+  response signatures / tooling" methodology as the original four.
+  `business_logic` is the one deliberate exception on `cwe`/
+  `attack_technique`/`attack_tactic` (kept `null`) — it's app-specific by
+  nature, no single CWE/ATT&CK technique fits, and forcing one on wouldn't
+  be more accurate; it's still `status: full` with real scenario-based
+  methodology, just no single-technique tag. `status: stub` as a *value*
+  still exists and is still handled (exploit_agent's prompt still nudges
+  toward `lookup_attack_technique` when it encounters one) — it's just that
+  no shipped file uses it right now; a finding type with no matching file
+  at all still returns `None` from `load_skill` (the explicit
+  `skill_loaded=None` fallback), distinct from a stub file that exists but
+  has no real methodology.
 
 ## Tools live behind an MCP server, not imports
 

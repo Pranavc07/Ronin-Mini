@@ -94,11 +94,15 @@ your use case is anywhere near the line.
   `--model`; see `models/__init__.py` for the provider registry.
 - **`agents/*.md`** — externalized role prompts (`recon.md`, `exploit.md`,
   `verify.md`), loaded as `str.format()` templates.
-- **`skills/*.md`** — per-vulnerability-class methodology (14 vuln types),
-  each tagged with `status` (`full`/`stub`), `cwe`, `attack_technique`
-  (MITRE ATT&CK id), `attack_tactic` in YAML frontmatter. `exploit_agent`
-  loads the matching skill for a finding's type; when only a `stub` exists,
-  it falls back to a local, offline ATT&CK lookup tool instead of guessing.
+- **`skills/*.md`** — per-vulnerability-class methodology (16 files: 14
+  web-app vuln types + `known_vulnerable_service`/`weak_credentials` for
+  network-layer findings), each tagged with `status` (`full`/`stub`), `cwe`,
+  `attack_technique` (MITRE ATT&CK id), `attack_tactic` in YAML frontmatter.
+  All 16 are `status: full` with real, hand-authored methodology as of
+  2026-08-19 — `exploit_agent` loads the matching skill for a finding's
+  type; a future `stub` skill (the mechanism still exists, no shipped file
+  uses it right now) falls back to a local, offline ATT&CK lookup tool
+  instead of guessing.
 - **`ronin-tools-mcp/`** — the MCP server. Tools are grouped into categories
   (`manifest.yaml` is the registry: timeouts + HITL default + declared replay
   coverage per tool — see [Replay coverage](#replay-coverage-and-the-unverifiable-status)
