@@ -88,9 +88,10 @@ tools:
     category: verify
     description: >
       Replay the exact tool calls from a finding's winning exploit attempt
-      (looked up by finding id in findings.json) and return original-vs-replayed
-      output for each. A literal replay for independent verification -- not new
-      exploration. The only tool the verify agent is given.
+      (looked up by finding id in the mission's stored findings) and return
+      original-vs-replayed output for each. A literal replay for independent
+      verification -- not new exploration. The only tool the verify agent is
+      given.
     timeout_seconds: 120
     # verify-only category -- exploit_agent can never call replay_probe itself,
     # so it can never appear inside a winning attempt's own transcript either.

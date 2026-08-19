@@ -10,11 +10,16 @@ A minimal, standalone AI pentesting harness. It is model agnostic, so any
 model reasons step-by-step over a target through a small, scoped set of
 tools, and every tool call is logged to an auditable transcript.
 
-This is deliberately a **thin harness**, not a framework: files instead of a
-database, sequential agent loops instead of a scheduler, no message queue, no
-dynamic agent graph. See [`docs/roadmap.md`](docs/roadmap.md) for what's
-shipped and what's deliberately deferred, and [`docs/progress.md`](docs/progress.md)
-for a running log of what changed and why.
+This is deliberately a **thin harness**, not a framework: sequential agent
+loops instead of a scheduler, no message queue, no dynamic agent graph, no
+web UI. Three-agent mode does use MongoDB for mission/finding state (one
+document per mission, no ORM, no service layer around it — see "Mission
+storage" in [Architecture at a glance](#architecture-at-a-glance) below) —
+the one deliberate exception, made because the tool output it stores is
+genuinely heterogeneous, not a step toward a bigger service architecture.
+See [`docs/roadmap.md`](docs/roadmap.md) for what's shipped and what's
+deliberately deferred, and [`docs/progress.md`](docs/progress.md) for a
+running log of what changed and why.
 
 Tools live behind a standalone **MCP tool server** (`ronin-tools-mcp/`, stdio
 transport) — agents connect to it as MCP clients, they don't import tool
@@ -523,6 +528,10 @@ Notable files:
 - `test_metasploit.py` — unit, mocked (resource-script construction,
   injection guard, lport range). `test_metasploit_integration.py` — real
   Docker, confirms a real module run completes without hanging.
+- `test_findings_store.py` — unit, `mongomock` in place of a real
+  `pymongo.MongoClient`; runs without MongoDB installed at all
+  (`pytest.importorskip("mongomock")` skips it if that package isn't
+  present, rather than failing).
 
 ## What this is *not*
 
