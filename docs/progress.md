@@ -5,6 +5,135 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-19 — Live-tested Phase 3 against DVWA; fixed a Unicode crash and a real pricing bug
+- Follow-up to Phase 3's build (below): live-tested it against real DVWA
+  with two OpenRouter models (Qwen3.6 Plus, GLM 5.2), at the user's request
+  to compare them. Confirms the Mongo-backed pipeline works end-to-end on
+  real runs, not just mongomock unit tests -- mission creation, `--mission-id`
+  resume after a mid-run crash, per-stage `stage_usage` recording, and
+  `replay_probe`'s Mongo-backed lookup from the separate MCP-server
+  subprocess all worked correctly across multiple real runs.
+- **Real bug #1**: `agent_core._live_print` crashed the whole run with
+  `UnicodeEncodeError` the first time a model's reasoning text contained a
+  character outside Windows console's `cp1252` codepage (e.g. `→`) --
+  killed the Qwen run mid-exploit-stage. Fixed with an encode-with-replace
+  fallback so the terminal degrades gracefully instead of crashing; the
+  JSONL log still gets the original untruncated text either way. One
+  regression test (`tests/test_live_logging.py`) reproduces the exact
+  failure via a fake cp1252-emulating stdout.
+- **Real bug #2**, caught while sanity-checking a suspiciously-perfect
+  $0.0000 total cost on the GLM run: `models/pricing.py` had no entry for
+  the paid `z-ai/glm-5.2` id, so `_rates_for`'s old bidirectional substring
+  fallback matched it against the unrelated `"z-ai/glm-5.2:free"` entry
+  (`"z-ai/glm-5.2" in "z-ai/glm-5.2:free"` is `True`) and silently priced a
+  run with over a million real tokens at the free tier's $0 rate. Separately,
+  `qwen/qwen3.6-plus` wasn't in the table at all, so every Qwen run fell
+  through to the Sonnet-tier `_DEFAULT_RATES` -- roughly a 9x overestimate.
+  Fixed by adding real rates for both models (looked up live via
+  openrouter.ai's model pages, not guessed) and tightening `_rates_for`'s
+  substring match to require a `/`/`:`/end-of-string boundary rather than a
+  bare substring check -- the exact class of bug that let the GLM case slip
+  through. 3 new regression tests in `tests/test_usage_tracking.py`,
+  including one that directly encodes the fixed boundary-check behavior.
+- With corrected pricing, real costs for the two DVWA comparison runs:
+  Qwen3.6 Plus ~$0.34 total (1 finding reached `verified`, but that run was
+  confounded by an initial too-tight recon budget, the Unicode crash, and
+  Docker degrading mid-run -- not a clean read on the model itself), GLM 5.2
+  ~$0.88 total on a clean run (7/12 findings reached `verified`). GLM's cost
+  per verified finding (~$0.125) came out cheaper than Qwen's (~$0.34)
+  despite higher raw token usage, because it converted far more of its
+  exploration into confirmed results -- it recovered from an identical
+  initial tool-usage mistake (calling `ronin_target.request` like a
+  `requests.Session`) in 1-2 calls via introspecting the function signature,
+  where Qwen repeatedly retried variations and burned its per-finding
+  budget more often.
+- **Also found and fixed, unrelated to any of the above**: mid-session,
+  Docker Desktop on Windows crashed on startup with `initializing Inference
+  manager: ... remove ...\dockerInference: The file cannot be accessed by
+  the system` -- a stale AF_UNIX socket reparse point left in a state only a
+  full OS reboot could release (confirmed via Docker Desktop's own
+  `monitor.log`; `Remove-Item`/`fsutil` both failed with the same underlying
+  Windows error even elevated). Diagnosed from Docker Desktop's log files
+  rather than guessing, since "docker hangs forever" has many unrelated
+  causes; a machine reboot resolved it cleanly with no data loss (Mongo/DVWA
+  containers just needed restarting after).
+- Full suite: 221/222 pass (only the pre-existing, unrelated
+  `test_mcp_server_full_flow` failure remains; `test_execute_python.py`
+  passed this time since Docker was actually up).
+- NEXT: no committed next step for Phase 3 itself -- it's live-verified.
+  Fair Qwen-vs-GLM rerun under clean, uninterrupted conditions would be the
+  real next step if a conclusive model-capability comparison (not just
+  today's infra-confounded one) is wanted.
+
+## 2026-08-19 — Phase 3: MongoDB mission storage, replaces findings.json
+- User asked to move to the next roadmap phase. Flagged one real tension
+  before starting: `CLAUDE.md`'s "Deliberate non-goals" section said "no
+  Postgres/database... state is files", which reads as a standing
+  constraint against exactly what Phase 3 (MongoDB) proposes -- confirmed
+  with the user this was the planned exception (roadmap.md always specified
+  it), not a conflict to resolve first.
+- New `findings_store.py`: `FindingsStore` wraps `pymongo.MongoClient`, one
+  document per mission in `ronin.missions` (`target`, `objective`,
+  `budget_usd`, `findings`, `stage_usage`). `save_findings` rewrites the
+  whole embedded list on every call (`$set`) -- deliberately mirrors the old
+  file-based `_save_findings`'s "load, mutate, rewrite" pattern exactly, so
+  the claim-state-machine logic in `recon_agent`/`exploit_agent`/
+  `verify_agent`'s `loop.py` needed zero changes beyond swapping the I/O
+  calls (`store.load_findings`/`store.save_findings` for `json.load`/
+  `json.dump` on a path). No per-finding documents, no migration tooling --
+  nothing in the pipeline ever needed more granularity than that.
+- Added the mission-level budget tracking the roadmap also asked for:
+  `stage_usage.<stage>` on the mission doc via `store.record_stage_usage`;
+  `run.py --budget-usd` checks cumulative estimated cost (same
+  `models.estimate_cost_usd` the existing per-stage print lines already use)
+  between stages and stops before starting one that would exceed the cap.
+  `run.py` now creates a mission at startup and prints its id;
+  `--mission-id` resumes an existing mission (skips recon if it already has
+  findings) -- a real resume path `findings.json` never had, since starting
+  over meant literally starting over.
+- The one non-trivial wrinkle: `categories/verify.py`'s `replay_probe`
+  (which looks up a finding's winning attempt to replay) runs inside
+  `ronin-tools-mcp/server.py`'s spawned subprocess -- a separate process
+  with no access to the host's `FindingsStore` instance. Decoupled
+  `run_replay_probe`/`register()` from storage entirely instead of teaching
+  them about Mongo: they now take an already-loaded findings list / a
+  zero-arg `findings_loader` callable, called fresh on every invocation.
+  `server.py`'s `build_server` is the only place that constructs a real
+  `FindingsStore`, from new `--mongo-uri`/`--mission-id` CLI args
+  (deferred-imported so recon/exploit's server spawns, which pass neither,
+  never need `pymongo` importable at all). `agent_core.mcp_server_params`
+  takes `mongo_uri`/`mission_id` in place of the old `findings_path`.
+- `docker-compose.yml` added (`docker-compose up -d mongo`) for a one-line
+  local instance; README/CLAUDE.md updated throughout (setup steps, CLI
+  flag tables, the "what this is not" section's non-goals framing, the
+  Phase 3 section in CLAUDE.md written in the same voice/detail as every
+  other architecture section, not just a changelog blurb).
+- Test blast radius was smaller than the refactor looked: only
+  `test_verify.py`/`test_replay_coverage.py` called `run_replay_probe`
+  directly with a path (updated to pass an in-memory findings list instead,
+  matching the new signature) -- no test called `run_recon_agent`/
+  `run_exploit_agent`/`run_verify_agent` directly, so the `store`/
+  `mission_id` parameter rename didn't ripple further. New
+  `tests/test_findings_store.py` (9 tests, `pytest.importorskip("mongomock")`
+  so it runs without a real MongoDB -- `mongomock.MongoClient` monkeypatched
+  in for `pymongo.MongoClient`): mission creation, findings round-trip,
+  wholesale-overwrite-not-merge semantics, unknown-mission errors on every
+  method, stage usage recording, budget defaults. `pymongo`/`mongomock`
+  installed; `pymongo` added to `requirements.txt` (`mongomock` left out --
+  it's test-only and this repo has no separate dev-requirements file, same
+  as `pytest` itself). Full suite: 209/211 pass (the same 2 pre-existing,
+  unrelated failures as every prior session -- `test_execute_python.py`'s
+  Docker-down guard gap, `test_mcp_server_full_flow`'s stale expected-tool
+  list -- neither touched by this change; Docker wasn't running this
+  session so those couldn't be re-checked either way).
+- NEXT: not live-tested against a real MongoDB instance or a real target --
+  Docker/Mongo were both down this session. First real check should be a
+  live `run.py` run against an already-validated target (Juice Shop/DVWA/
+  Metasploitable) confirming the full pipeline behaves identically to the
+  `findings.json`-backed runs it replaces, plus exercising `--mission-id`
+  resume and `--budget-usd` for real (both only unit-tested via mongomock
+  so far, never against actual multi-stage token spend).
+
 ## 2026-08-19 — Hardened two security gaps from a review: redirect scope bypass + prompt injection
 - User-driven security hardening pass, scoped explicitly to two items from a
   broader review (persistence/CI/adversarial-suite/benchmarking tracked

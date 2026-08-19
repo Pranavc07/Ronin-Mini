@@ -1,7 +1,9 @@
 """verify category: replay_probe -- the ONLY tool the verify agent gets.
 
 It does not discover or invent anything. Given a finding id, it looks up that
-finding's winning (status == "exploited") exploit attempt in findings.json and
+finding's winning (status == "exploited") exploit attempt among the mission's
+findings (fetched via a findings_loader callable -- server.py wires this to
+findings_store.FindingsStore for a real run, tests pass a plain list) and
 walks every recorded tool call in that attempt's transcript. For a tool with
 real replay support (manifest.yaml's replayable: "true"/"partial"), it
 literally re-executes the exact call -- same probe_variant requests, same
@@ -236,21 +238,18 @@ def _winning_attempt(finding: dict) -> dict | None:
     return exploited[-1] if exploited else None
 
 
-def run_replay_probe(scope, executor, timeouts: dict, findings_path: str | None, finding_id: str) -> dict:
+def run_replay_probe(scope, executor, timeouts: dict, findings: list[dict] | None, finding_id: str) -> dict:
     """The actual replay logic, as a module-level function so it's testable
     without spinning up the MCP server (mirrors every other category's
-    run_* / register() split).
+    run_* / register() split). `findings` is the mission's full findings
+    list (already loaded by the caller -- see register() below), not a path;
+    storage is Mongo-backed (findings_store.FindingsStore) but this function
+    doesn't know or care, it just walks the list it's given.
     """
-    if not findings_path:
-        return {"error": "replay_probe has no findings file configured on the server"}
+    if findings is None:
+        return {"error": "replay_probe has no mission findings configured on the server"}
 
-    try:
-        with open(findings_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except OSError as e:
-        return {"error": f"could not read findings file: {e}"}
-
-    finding = next((x for x in data.get("findings", []) if x.get("id") == finding_id), None)
+    finding = next((x for x in findings if x.get("id") == finding_id), None)
     if finding is None:
         return {"error": f"no finding with id {finding_id!r}"}
 
@@ -328,7 +327,13 @@ def run_replay_probe(scope, executor, timeouts: dict, findings_path: str | None,
     }
 
 
-def register(mcp, scope, executor, timeouts: dict, findings_path: str | None) -> None:
+def register(mcp, scope, executor, timeouts: dict, findings_loader=None) -> None:
+    """findings_loader: an optional zero-arg callable returning the mission's
+    current findings list (e.g. `lambda: store.load_findings(mission_id)`).
+    Called fresh on every replay_probe invocation rather than snapshotted
+    once at server startup, so it always reflects the latest saved state.
+    """
+
     def replay_probe(finding_id: str) -> dict:
         """Replay the exact tool calls from a finding's winning exploit attempt
         and return original-vs-replayed output for each, so you can judge
@@ -339,6 +344,7 @@ def register(mcp, scope, executor, timeouts: dict, findings_path: str | None) ->
         support exists for that specific tool (a tooling gap), not that the
         call failed to reproduce; see each entry's "reason".
         """
-        return run_replay_probe(scope, executor, timeouts, findings_path, finding_id)
+        findings = findings_loader() if findings_loader is not None else None
+        return run_replay_probe(scope, executor, timeouts, findings, finding_id)
 
     mcp.add_tool(replay_probe)

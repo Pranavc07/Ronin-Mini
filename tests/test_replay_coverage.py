@@ -172,8 +172,6 @@ def test_replayable_false_tool_gets_structured_stub_via_run_replay_probe(tmp_pat
     tool to prove the mechanism itself, independent of today's specific
     tool set.
     """
-    import json
-
     false_tools = [name for name, meta in EXPLOIT_REACHABLE.items() if meta.replayable == "false"]
     if false_tools:
         # If a real exploit-agent-reachable tool is ever declared "false",
@@ -182,30 +180,22 @@ def test_replayable_false_tool_gets_structured_stub_via_run_replay_probe(tmp_pat
     else:
         tool_name = "synthetic_declared_unreplayable_tool"
 
-    findings_path = tmp_path / "findings.json"
-    findings_path.write_text(
-        json.dumps(
-            {
-                "findings": [
-                    {
-                        "id": "f1",
-                        "type": "command_injection",
-                        "target": "10.0.0.5",
-                        "status": "exploited",
-                        "exploit_attempts": [
-                            {
-                                "transcript": [{"tool": tool_name, "input": {}, "output": {"claim": "rce"}}],
-                                "verdict": {"status": "exploited", "evidence": "claimed rce"},
-                            }
-                        ],
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
+    findings = [
+        {
+            "id": "f1",
+            "type": "command_injection",
+            "target": "10.0.0.5",
+            "status": "exploited",
+            "exploit_attempts": [
+                {
+                    "transcript": [{"tool": tool_name, "input": {}, "output": {"claim": "rce"}}],
+                    "verdict": {"status": "exploited", "evidence": "claimed rce"},
+                }
+            ],
+        }
+    ]
 
-    result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, str(findings_path), "f1")
+    result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings, "f1")
 
     assert result["any_call_replayed"] is False
     entry = result["replays"][0]

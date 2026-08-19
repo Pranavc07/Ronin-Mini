@@ -127,8 +127,21 @@ def _short(text: str, limit: int) -> str:
 
 
 def _live_print(label: str, message: str) -> None:
+    """Print one live-progress line. Model-generated text can contain
+    characters (e.g. arrows, smart quotes) that don't exist in a Windows
+    console's legacy codepage (cp1252 etc) -- a UnicodeEncodeError here would
+    crash the whole run over a cosmetic terminal-output issue, so fall back
+    to a replaced-character version in that specific encoding rather than
+    letting the run die. The JSONL log (_append_log) always gets the
+    original, unmodified text -- this fallback only affects the terminal.
+    """
     prefix = f"[{label}] " if label else ""
-    print(f"{prefix}{message}", flush=True)
+    line = f"{prefix}{message}"
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "ascii"
+        print(line.encode(encoding, errors="replace").decode(encoding), flush=True)
 
 
 def _append_log(log_path: str | None, event: dict) -> None:
@@ -195,15 +208,19 @@ def load_skill(finding_type: str) -> SkillDoc | None:
 
 
 def mcp_server_params(
-    scope_dir: str, allowed_hosts: list[str], findings_path: str | None = None
+    scope_dir: str,
+    allowed_hosts: list[str],
+    mongo_uri: str | None = None,
+    mission_id: str | None = None,
 ) -> StdioServerParameters:
     args = [_MCP_SERVER_PATH, "--scope-dir", scope_dir]
     for host in allowed_hosts:
         args += ["--allowed-host", host]
-    # Only the verify agent's replay_probe needs the findings file server-side;
-    # the other agents spawn the server without it and it's simply unused.
-    if findings_path is not None:
-        args += ["--findings-path", findings_path]
+    # Only the verify agent's replay_probe needs mission findings server-side
+    # (to look up a finding's winning attempt); the other agents spawn the
+    # server without these and they're simply unused.
+    if mongo_uri is not None and mission_id is not None:
+        args += ["--mongo-uri", mongo_uri, "--mission-id", mission_id]
     return StdioServerParameters(command=sys.executable, args=args)
 
 

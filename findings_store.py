@@ -1,0 +1,88 @@
+"""findings_store.py -- MongoDB-backed persistence for mission findings,
+replacing findings.json (Phase 3, see docs/roadmap.md).
+
+Same claim-state-machine shape as before: a mission's findings are a plain
+list of dicts, loaded, mutated in place by recon/exploit/verify's loop.py,
+and rewritten wholesale on every save -- exactly what the old file-based
+_write_findings/_save_findings did with json.dump. Only the persistence
+mechanism changed here, not the schema or the state machine. Findings live
+embedded in the mission document (one document per mission, in the
+`missions` collection) rather than as separate per-finding documents --
+nothing in the pipeline ever needed more granularity than "load the whole
+list, mutate it, save the whole list back."
+
+Used from two places: the host process (recon_agent/exploit_agent/
+verify_agent's loop.py, run.py) and the MCP server subprocess
+(ronin-tools-mcp/server.py, for replay_probe's read-only lookup) -- each
+opens its own MongoClient, since they're separate processes.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from pymongo import MongoClient
+
+DEFAULT_MONGO_URI = "mongodb://localhost:27017"
+DEFAULT_DB_NAME = "ronin"
+MISSIONS_COLLECTION = "missions"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class MissionNotFound(ValueError):
+    pass
+
+
+class FindingsStore:
+    def __init__(self, mongo_uri: str = DEFAULT_MONGO_URI, db_name: str = DEFAULT_DB_NAME):
+        self.client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        self.db = self.client[db_name]
+        self.missions = self.db[MISSIONS_COLLECTION]
+
+    def create_mission(self, target: str, objective: str, budget_usd: float | None = None) -> str:
+        mission_id = uuid.uuid4().hex[:12]
+        self.missions.insert_one(
+            {
+                "_id": mission_id,
+                "target": target,
+                "objective": objective,
+                "created_at": _now_iso(),
+                "budget_usd": budget_usd,
+                "findings": [],
+                # stage name ("recon"/"exploit"/"verify") -> that stage's summed Usage dict.
+                "stage_usage": {},
+            }
+        )
+        return mission_id
+
+    def load_findings(self, mission_id: str) -> list[dict]:
+        doc = self.missions.find_one({"_id": mission_id}, {"findings": 1})
+        if doc is None:
+            raise MissionNotFound(f"no mission with id {mission_id!r}")
+        return doc.get("findings", [])
+
+    def save_findings(self, mission_id: str, findings: list[dict]) -> None:
+        result = self.missions.update_one({"_id": mission_id}, {"$set": {"findings": findings}})
+        if result.matched_count == 0:
+            raise MissionNotFound(f"no mission with id {mission_id!r}")
+
+    def record_stage_usage(self, mission_id: str, stage: str, usage: dict) -> None:
+        result = self.missions.update_one({"_id": mission_id}, {"$set": {f"stage_usage.{stage}": usage}})
+        if result.matched_count == 0:
+            raise MissionNotFound(f"no mission with id {mission_id!r}")
+
+    def get_mission(self, mission_id: str) -> dict | None:
+        return self.missions.find_one({"_id": mission_id})
+
+    def get_budget_usd(self, mission_id: str) -> float | None:
+        doc = self.missions.find_one({"_id": mission_id}, {"budget_usd": 1})
+        if doc is None:
+            raise MissionNotFound(f"no mission with id {mission_id!r}")
+        return doc.get("budget_usd")
+
+    def close(self) -> None:
+        self.client.close()

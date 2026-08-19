@@ -4,3 +4,4 @@ requests
 dnspython
 mcp
 pyyaml
+pymongo

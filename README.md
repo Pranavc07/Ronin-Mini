@@ -114,18 +114,27 @@ your use case is anywhere near the line.
   call, `plan` prompts once per finding/run and reuses that decision. Gated
   by default: `probe_variant`, `execute_python`, `replay_probe`, every
   `network_exploit` tool, and `metasploit`.
-- **`findings.json`** — the state file three-agent mode hands off through:
-  `new → claimed → exploited | dead-end | incomplete → verifying → verified
-  | false_positive | unverifiable | verify_incomplete`. `unverifiable` means
-  the verification tooling has no way to confirm or refute the claim (a
-  coverage gap) — distinct from `false_positive`, which means a replay
-  actually ran and contradicted it.
+- **Mission storage (MongoDB)** — three-agent mode hands findings off through
+  a Mongo document per mission (`findings_store.FindingsStore`, one document
+  in the `ronin.missions` collection; `--mongo-uri` to point elsewhere,
+  default `mongodb://localhost:27017`), not a `findings.json` file anymore.
+  Same state machine as before: `new → claimed → exploited | dead-end |
+  incomplete → verifying → verified | false_positive | unverifiable |
+  verify_incomplete`. `unverifiable` means the verification tooling has no
+  way to confirm or refute the claim (a coverage gap) — distinct from
+  `false_positive`, which means a replay actually ran and contradicted it.
+  `run.py` prints the mission id at startup; pass it back via `--mission-id`
+  to resume a mission (skips recon if it already has findings) or to inspect
+  it later straight from Mongo.
 - **Token usage + cost** — every model call's token usage is captured on
   `ModelResponse` and summed across a run by `agent_core.run_tool_loop`.
   `main.py`/`run.py` print token counts and an estimated dollar cost after
-  each stage, via a static pricing table (`models/pricing.py`) — treat the
-  dollar figure as an approximate, same-session ballpark, not authoritative
-  billing; check your provider's real billing dashboard for real spend.
+  each stage, via a static pricing table (`models/pricing.py` — currently
+  covers Claude Opus/Sonnet/Haiku plus `qwen/qwen3.6-plus` and `z-ai/glm-5.2`
+  via OpenRouter; an unrecognized model id falls back to Sonnet-tier rates
+  rather than silently showing $0) — treat the dollar figure as an
+  approximate, same-session ballpark, not authoritative billing; check your
+  provider's real billing dashboard for real spend.
 - **Real-time live logging** — every model reasoning turn and every tool
   call/result prints immediately as it happens (prefixed `[recon]`,
   `[exploit:f3]`, `[verify:f9]`, etc. — a terminal watching the whole
@@ -137,27 +146,133 @@ your use case is anywhere near the line.
 
 ## Setup
 
+Full, from-scratch setup for anyone cloning this repo. Windows/PowerShell
+notes are called out where a step differs from the Linux/macOS command.
+
+### 1. Clone and install Python dependencies
+
 ```bash
+git clone https://github.com/Pranavc07/Ronin-Mini.git
+cd Ronin-Mini
+python -m venv .venv && source .venv/bin/activate   # optional but recommended
 pip install -r requirements.txt
 ```
 
-You also need:
-- [ripgrep](https://github.com/BurntSushi/ripgrep#installation) (`rg`) on
-  your `PATH` — used by `code_search`.
-- **Docker, running.** Two independent uses: `execute_python` spins up a
-  fresh, disposable sandbox container per call (single-agent mode doesn't
-  need it); `network_exploit`/`metasploit` tools run inside one long-lived
-  Kali container (`ronin-kali-box`) that's built and started on first use —
-  the image is ~4.3GB (Kali + nmap/nikto/sqlmap/hydra/gobuster/
-  enum4linux-ng/exploitdb/metasploit-framework), so the first run takes a
-  while.
+Requires Python 3.11+. `requirements.txt` pulls in the Anthropic SDK, the
+OpenAI SDK (used for any OpenAI-compatible provider, including OpenRouter),
+`pymongo`, `mcp`, and the rest of the harness's real dependencies — no
+extras needed for the core pipeline.
 
-Set your Anthropic API key (a `.env` file with `ANTHROPIC_API_KEY=...` works
-too, if your shell loads it):
+### 2. Install ripgrep
+
+`code_search` (a `fileops` tool both `recon_agent` and the single-agent loop
+can reach) shells out to `rg`. Install it and confirm it's on your `PATH`:
+
+- macOS: `brew install ripgrep`
+- Debian/Ubuntu: `sudo apt install ripgrep`
+- Windows: `winget install BurntSushi.ripgrep.MSVC` or `choco install ripgrep`
+- Verify: `rg --version`
+
+Everything else works without it; only `code_search` calls fail (loudly,
+not silently) if it's missing.
+
+### 3. Install and start Docker
+
+Required for `execute_python` (single-agent and three-agent mode both use
+it), the Kali attack box (`network_exploit`/`metasploit` tools), and
+MongoDB if you run it via the bundled `docker-compose.yml`.
+
+- Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+  (Windows/macOS) or Docker Engine (Linux), and make sure the daemon is
+  actually running (`docker version` should print both a `Client:` and
+  `Server:` block with no connection error).
+- No manual image builds needed — `execute_python`'s sandbox image and the
+  Kali attack box (`ronin-kali-box`, ~4.3GB: Kali + nmap/nikto/sqlmap/hydra/
+  gobuster/enum4linux-ng/exploitdb/metasploit-framework) both build
+  themselves automatically on first use. The first `network_exploit` or
+  `metasploit` call in a fresh environment will take a while; every call
+  after that reuses the already-built image/container.
+
+### 4. Start MongoDB (three-agent mode only)
+
+`run.py` (three-agent mode) stores mission/finding state in MongoDB via
+`findings_store.py`; `main.py` (single-agent mode) doesn't need this at all.
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+docker-compose up -d mongo
 ```
+
+This starts a local MongoDB 7 instance on `localhost:27017` with a named
+volume (`ronin-mongo-data`) so data survives container restarts. Already
+running MongoDB somewhere else? Skip this and pass `--mongo-uri` pointing at
+it instead (any standard connection string, e.g.
+`mongodb://user:pass@host:27017`).
+
+### 5. Get API keys and configure `.env`
+
+Ronin talks to models through a provider-agnostic adapter
+(`models/build_adapter`) — pick **Anthropic direct**, **OpenRouter**
+(fronting many providers through one account), or both.
+
+Create a `.env` file in the repo root (the harness reads this automatically
+via your shell, or `export` the same variables directly):
+
+```bash
+# Anthropic direct -- used when you run with --provider anthropic (the default)
+ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenRouter -- used when you run with --provider openrouter
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+You only need the key for whichever provider(s) you actually plan to use.
+`main.py`/`run.py` print a warning (not a hard failure) if
+`ANTHROPIC_API_KEY` is unset, regardless of which provider you're actually
+using — harmless if you're running with `--provider openrouter`.
+
+**Anthropic direct** — get a key at
+[console.anthropic.com](https://console.anthropic.com/settings/keys). Run
+with `--provider anthropic --model claude-sonnet-4-6` (or omit both; that's
+the default).
+
+**OpenRouter** — one account/key fronts many different model providers
+(Qwen, GLM/Zhipu, DeepSeek, and more), so you don't need a separate key per
+model family:
+
+1. Sign up and get a key at [openrouter.ai/keys](https://openrouter.ai/keys).
+   Add credits — OpenRouter is pay-as-you-go, not a monthly subscription.
+2. Set `OPENROUTER_API_KEY` as shown above.
+3. Run with `--provider openrouter --model <full-model-slug>`, e.g.:
+
+   ```bash
+   python run.py --target http://localhost:4280 \
+     --objective "..." --scope-dir . \
+     --provider openrouter --model qwen/qwen3.6-plus
+   ```
+
+   Other confirmed-working slugs: `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`.
+   **Watch for `:free` suffixes** (e.g. `z-ai/glm-5.2:free`) — OpenRouter's
+   free tiers commonly don't support tool calling at all, which this
+   harness requires end-to-end; use the paid (no-suffix) model id instead.
+   Browse [openrouter.ai/models](https://openrouter.ai/models) (filter by
+   "Supports tools") for other options.
+
+Adding a genuinely different endpoint (e.g. GLM/Zhipu's own API directly,
+rather than via OpenRouter) is a small addition — see `models/__init__.py`'s
+`_build_openrouter_adapter` for the pattern (`OpenAICompatibleAdapter`
+pointed at a specific `base_url`/API-key env var); no new adapter class
+needed, just a new provider entry.
+
+### 6. Sanity-check the setup
+
+```bash
+docker version    # confirms Docker daemon is reachable
+docker-compose ps # confirms mongo is Up (three-agent mode)
+rg --version       # confirms ripgrep is on PATH
+pytest tests/      # full suite -- Docker/API-dependent tests skip automatically if unavailable
+```
+
+You're ready to run either mode — see below.
 
 ## Running it (single-agent)
 
@@ -191,9 +306,13 @@ python main.py \
 python run.py \
   --target 192.168.56.5 \
   --objective "Find authentication, IDOR, injection, and network-service vulnerabilities" \
-  --scope-dir . \
-  --findings-path findings.json
+  --scope-dir .
 ```
+
+`run.py` prints the generated mission id at startup (`[+] Mission id: <id>`);
+pass `--mission-id <id>` on a later invocation to resume that mission
+(recon is skipped if it already has findings) or to inspect it from Mongo
+directly (`mongosh`, Compass, whatever you already use).
 
 ### CLI flags (`run.py`)
 
@@ -202,7 +321,9 @@ python run.py \
 | `--target` | yes | — | Target URL or host |
 | `--objective` | yes | — | Free-text recon objective |
 | `--scope-dir` | yes | — | Directory `code_search`/`file_read` are sandboxed to |
-| `--findings-path` | no | `findings.json` | Where recon writes / exploit+verify read findings |
+| `--mongo-uri` | no | `mongodb://localhost:27017` | MongoDB connection URI where mission findings are stored |
+| `--mission-id` | no | auto-generated | Resume an existing mission instead of starting a fresh one |
+| `--budget-usd` | no | none | Optional mission-level cost cap (approximate); the run stops before starting a stage that would exceed it |
 | `--recon-max-iterations` / `--recon-max-minutes` | no | `40` / `20.0` | Recon's own budget |
 | `--exploit-per-finding-max-iterations` / `--exploit-per-finding-max-minutes` | no | `10` / `5.0` | Budget *per finding* for exploit_agent (each finding gets a fresh conversation) |
 | `--verify-per-finding-max-iterations` / `--verify-per-finding-max-minutes` | no | `6` / `5.0` | Budget *per finding* for verify_agent |
@@ -223,18 +344,18 @@ everything before going deep on the first interesting thing it finds.
 1. **`recon_agent`** (tools: `recon` + `fileops` + `network_exploit` — it can
    reach for nmap/nikto/sqlmap/hydra/gobuster/enum4linux/searchsploit itself,
    deciding what fits the target) explores and writes candidate findings,
-   typed from a fixed 14-word vocabulary, to `findings.json`:
+   typed from a fixed 14-word vocabulary, into the mission's `findings` list
+   in Mongo:
 
    ```jsonc
-   {
-     "findings": [
-       {
-         "id": "f1", "type": "sqli", "target": "/rest/products/search",
-         "evidence": "...", "status": "new", "discovered_by": "recon-agent",
-         "exploit_attempts": [], "verify_attempts": []
-       }
-     ]
-   }
+   // shape of the mission document's "findings" field (ronin.missions in Mongo)
+   [
+     {
+       "id": "f1", "type": "sqli", "target": "/rest/products/search",
+       "evidence": "...", "status": "new", "discovered_by": "recon-agent",
+       "exploit_attempts": [], "verify_attempts": []
+     }
+   ]
    ```
 
 2. **`exploit_agent`** (tools: `web_exploit` + `exploit_runtime` +
@@ -405,8 +526,12 @@ Notable files:
 
 ## What this is *not*
 
-By design, this harness does not include: a database, a web UI, a message
-queue, a dynamic agent graph, or a fourth agent. State is files
-(`findings.json`). Orchestration is `run.py` running three loops in
+By design, this harness does not include: a web UI, a message queue, a
+dynamic agent graph, or a fourth agent. State lives in one Mongo document
+per mission (Phase 3 — see `findings_store.py`), a deliberate exception to
+"no database" made specifically because the tool output it stores (nmap
+XML-derived data, sqlmap/hydra/metasploit results, HTTP probe diffs) is
+genuinely heterogeneous, not because this is heading toward a service
+architecture. Orchestration is still `run.py` running three loops in
 sequence, nothing more. See [`docs/roadmap.md`](docs/roadmap.md) for what's
 deliberately staying out of scope even as this grows.

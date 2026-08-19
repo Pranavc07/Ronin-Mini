@@ -17,13 +17,25 @@ PRICING: dict[str, tuple[float, float, float, float]] = {
     "claude-haiku-4-5": (0.80, 4.00, 1.00, 0.08),
     # OpenRouter's free tier for this model -- confirmed genuinely $0 via the
     # model's OpenRouter page ("Price: Free"), distinct from the paid
-    # "z-ai/glm-5.2" (no ":free" suffix). NOTE: if the paid variant is ever
-    # added here too, _rates_for's substring fallback would need tightening
-    # first -- "z-ai/glm-5.2" is literally a substring of
-    # "z-ai/glm-5.2:free", so an exact-match miss on the paid id could fall
-    # through to these $0 rates. Harmless today since only the free entry
-    # exists, but worth remembering before adding the paid one.
+    # "z-ai/glm-5.2" (no ":free" suffix) below.
     "z-ai/glm-5.2:free": (0.0, 0.0, 0.0, 0.0),
+    # Real per-OpenRouter-page rates for the paid variant, confirmed 2026-08-19
+    # (openrouter.ai/z-ai/glm-5.2). This is also a live bug fix: before this
+    # entry existed, _rates_for's substring fallback below matched the paid
+    # id against the free-tier entry above ("z-ai/glm-5.2" in
+    # "z-ai/glm-5.2:free" is True), silently pricing real paid usage at $0 --
+    # caught live-testing this model against DVWA, where a run with over a
+    # million real tokens reported $0.0000. Cache-write rate isn't published
+    # by OpenRouter for this model; approximated as equal to the input rate
+    # (the observed run never triggered a cache write either way, so this is
+    # currently untested against real data).
+    "z-ai/glm-5.2": (0.50, 3.15, 0.50, 0.115),
+    # Real per-OpenRouter-page rates, confirmed 2026-08-19
+    # (openrouter.ai/qwen/qwen3.6-plus). Also a bug fix: this model wasn't in
+    # PRICING at all, so every run fell through to the Sonnet-tier
+    # _DEFAULT_RATES below -- roughly a 9x overestimate versus its real,
+    # much cheaper rates.
+    "qwen/qwen3.6-plus": (0.325, 1.95, 0.4063, 0.0325),
 }
 
 # Fallback for a model id not in PRICING (e.g. a new release): Sonnet-tier
@@ -32,10 +44,21 @@ _DEFAULT_RATES = (3.00, 15.00, 3.75, 0.30)
 
 
 def _rates_for(model: str) -> tuple[float, float, float, float]:
+    """Exact match first; then a substring fallback for versioned/prefixed
+    variants of a known model id. The substring check requires the shorter
+    string to end at a '/' or ':' boundary in the longer one (not just any
+    substring) -- a bare `in` check would match "z-ai/glm-5.2" against
+    "z-ai/glm-5.2:free" and silently apply that unrelated model's rate,
+    which is exactly the real bug this guarded against (see the PRICING
+    comment above). Falls back to Sonnet-tier _DEFAULT_RATES, not $0, for a
+    genuinely unknown id.
+    """
     if model in PRICING:
         return PRICING[model]
     for name, rates in PRICING.items():
-        if name in model or model in name:
+        if name.startswith(model) and name[len(model):len(model) + 1] in ("/", ":", ""):
+            return rates
+        if model.startswith(name) and model[len(name):len(name) + 1] in ("/", ":", ""):
             return rates
     return _DEFAULT_RATES
 

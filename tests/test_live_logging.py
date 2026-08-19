@@ -53,6 +53,49 @@ def test_short_collapses_newlines_and_whitespace():
     assert agent_core._short("line one\n\n  line two", 100) == "line one line two"
 
 
+# --- _live_print ---------------------------------------------------------
+
+
+def test_live_print_falls_back_when_terminal_cant_encode_the_text(monkeypatch):
+    """Reproduces a real crash hit live-testing on Windows: a model's
+    reasoning text containing a character outside the console's legacy
+    codepage (e.g. '→', not in cp1252) used to raise UnicodeEncodeError
+    straight out of print() and kill the whole run over cosmetic terminal
+    output. _live_print must fall back to a replaced-character version in
+    that case, not propagate the error.
+    """
+    import io
+
+    class Cp1252Stdout(io.TextIOBase):
+        encoding = "cp1252"
+
+        def __init__(self):
+            self.chunks: list[str] = []
+
+        def write(self, s):
+            s.encode("cp1252")  # emulate a real cp1252 console raising here
+            self.chunks.append(s)
+            return len(s)
+
+        def flush(self):
+            pass
+
+    fake_stdout = Cp1252Stdout()
+    monkeypatch.setattr(sys, "stdout", fake_stdout)
+
+    agent_core._live_print("exploit:f1", "Step 1 → Step 2")
+
+    written = "".join(fake_stdout.chunks)
+    assert "Step 1" in written
+    assert "Step 2" in written
+    assert "→" not in written  # replaced, not crashed
+
+
+def test_live_print_plain_ascii_unaffected(capsys):
+    agent_core._live_print("recon", "hello world")
+    assert capsys.readouterr().out == "[recon] hello world\n"
+
+
 # --- _append_log --------------------------------------------------------
 
 

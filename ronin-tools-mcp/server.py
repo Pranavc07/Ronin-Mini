@@ -14,8 +14,12 @@ import sys
 
 # Run as a plain script, not an installed package -- put this directory on
 # sys.path so `import manifest`, `import scope`, etc. resolve regardless of
-# the caller's own working directory.
+# the caller's own working directory. Also put the repo root on sys.path so
+# `import findings_store` resolves -- this subprocess is spawned with no
+# guarantee the root dir is already on sys.path (unlike recon_agent/loop.py
+# etc, which live under the root and get it via a relative sys.path.insert).
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 from mcp.server.mcpserver import MCPServer  # noqa: E402
 
@@ -25,19 +29,36 @@ from scope import Scope  # noqa: E402
 from categories import attack_reference, exploit_runtime, fileops, metasploit, network_exploit, recon, verify, web_exploit  # noqa: E402
 
 
-def build_server(scope_dir: str, allowed_hosts: list[str], findings_path: str | None = None) -> MCPServer:
+def build_server(
+    scope_dir: str,
+    allowed_hosts: list[str],
+    mongo_uri: str | None = None,
+    mission_id: str | None = None,
+) -> MCPServer:
     manifest = load_manifest()
     timeouts = {name: meta.timeout_seconds for name, meta in manifest.items()}
     scope = Scope(scope_dir=scope_dir, allowed_hosts=allowed_hosts)
+
+    # Only the verify agent's replay_probe needs mission findings server-side.
+    # Deferred import: findings_store pulls in pymongo, which every other
+    # agent's server spawn shouldn't need to have installed/importable just
+    # to run recon/exploit's tool categories.
+    findings_loader = None
+    if mongo_uri is not None and mission_id is not None:
+        from findings_store import FindingsStore
+
+        store = FindingsStore(mongo_uri)
+        findings_loader = lambda: store.load_findings(mission_id)  # noqa: E731
 
     mcp = MCPServer("ronin-tools")
     recon.register(mcp, scope, executor, timeouts)
     fileops.register(mcp, scope, executor, timeouts)
     web_exploit.register(mcp, scope, executor, timeouts)
     exploit_runtime.register(mcp, scope, executor, timeouts)
-    # verify.register takes findings_path (its replay_probe reads the winning
-    # attempt from there); the uniform register() signature doesn't carry it.
-    verify.register(mcp, scope, executor, timeouts, findings_path)
+    # verify.register takes findings_loader (its replay_probe reads the
+    # winning attempt via this callable); the uniform register() signature
+    # doesn't carry it.
+    verify.register(mcp, scope, executor, timeouts, findings_loader)
     network_exploit.register(mcp, scope, executor, timeouts)
     attack_reference.register(mcp, scope, executor, timeouts)
     metasploit.register(mcp, scope, executor, timeouts)
@@ -56,13 +77,18 @@ def main() -> None:
         help="Host allowed for network tools (repeatable for multiple hosts)",
     )
     parser.add_argument(
-        "--findings-path",
+        "--mongo-uri",
         default=None,
-        help="findings.json path -- only used by the verify agent's replay_probe tool",
+        help="Mongo connection URI -- only used by the verify agent's replay_probe tool",
+    )
+    parser.add_argument(
+        "--mission-id",
+        default=None,
+        help="Mission id in the missions collection -- only used by replay_probe",
     )
     args = parser.parse_args()
 
-    mcp = build_server(args.scope_dir, args.allowed_host, args.findings_path)
+    mcp = build_server(args.scope_dir, args.allowed_host, args.mongo_uri, args.mission_id)
     mcp.run(transport="stdio")
 
 

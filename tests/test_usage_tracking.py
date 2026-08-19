@@ -72,6 +72,41 @@ def test_estimate_cost_usd_glm_free_tier_is_genuinely_zero():
     assert cost == 0.0
 
 
+def test_estimate_cost_usd_glm_paid_tier_is_not_priced_as_free():
+    """Regression guard for a real bug caught live-testing this model against
+    DVWA: the paid "z-ai/glm-5.2" id (no ":free" suffix) was falling through
+    _rates_for's old bidirectional substring fallback and matching the
+    unrelated "z-ai/glm-5.2:free" entry (since "z-ai/glm-5.2" is literally a
+    substring of "z-ai/glm-5.2:free") -- a run with over a million real
+    tokens reported $0.0000. Real rates confirmed via openrouter.ai/z-ai/glm-5.2.
+    """
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    cost = estimate_cost_usd("z-ai/glm-5.2", usage)
+    assert cost == 0.50 + 3.15
+
+
+def test_estimate_cost_usd_qwen_uses_real_rates_not_sonnet_fallback():
+    """Regression guard: qwen/qwen3.6-plus wasn't in PRICING at all, so every
+    run used the Sonnet-tier _DEFAULT_RATES -- roughly a 9x overestimate of
+    its real, much cheaper OpenRouter rate.
+    """
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    cost = estimate_cost_usd("qwen/qwen3.6-plus", usage)
+    assert cost == 0.325 + 1.95
+
+
+def test_rates_for_substring_fallback_requires_boundary_not_bare_substring():
+    """A bare `name in model` check would match "glm-5" against
+    "glm-5.2:free-tier-variant" or similar false positives. The boundary
+    check (next char must be '/', ':', or end-of-string) prevents that --
+    confirmed here with a synthetic id that's a raw substring but not a real
+    versioned/prefixed variant.
+    """
+    from models.pricing import _rates_for
+
+    assert _rates_for("z-ai/glm-5.2extra") == _rates_for("some-unknown-model")
+
+
 def test_sum_usage_across_multiple_dicts():
     u1 = {"input_tokens": 10, "output_tokens": 1, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
     u2 = {"input_tokens": 20, "output_tokens": 2, "cache_creation_input_tokens": 3, "cache_read_input_tokens": 4}

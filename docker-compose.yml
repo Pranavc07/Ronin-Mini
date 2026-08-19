@@ -1,0 +1,20 @@
+# Local MongoDB for three-agent mode's mission storage (findings_store.py,
+# Phase 3 -- see docs/roadmap.md). Not used by single-agent mode (main.py).
+#
+#   docker-compose up -d mongo
+#
+# Data persists in the `ronin-mongo-data` named volume across restarts.
+# Point run.py at a different instance with --mongo-uri instead, if you
+# already run MongoDB elsewhere.
+services:
+  mongo:
+    image: mongo:7
+    container_name: ronin-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - ronin-mongo-data:/data/db
+    restart: unless-stopped
+
+volumes:
+  ronin-mongo-data:

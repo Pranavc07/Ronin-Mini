@@ -98,6 +98,20 @@ console for `anthropic`, a generic "your provider's dashboard" pointer
 otherwise) — this exists to give a same-session ballpark, not to replace
 real billing data.
 
+**Real bug, found 2026-08-19 comparing OpenRouter models on DVWA**:
+`PRICING` had no entry for the paid `"z-ai/glm-5.2"` id, so `_rates_for`'s
+old bidirectional substring fallback (`if name in model or model in name`)
+matched it against the unrelated `"z-ai/glm-5.2:free"` entry —
+`"z-ai/glm-5.2" in "z-ai/glm-5.2:free"` is `True` — silently pricing a real
+1M+-token paid run at the free tier's $0 rate. `"qwen/qwen3.6-plus"` wasn't
+in the table at all, so every Qwen run used the Sonnet-tier
+`_DEFAULT_RATES` fallback instead, a ~9x overestimate of its real rate.
+Fixed by adding real rates for both (looked up live via each model's
+OpenRouter page, not guessed) and tightening `_rates_for`'s substring match
+to require a `/`/`:`/end-of-string boundary rather than a bare substring
+check — the exact class of match that let the GLM case slip through. 3
+regression tests in `tests/test_usage_tracking.py`.
+
 ## Real-time live logging (`label`/`log_path` on `run_tool_loop`)
 
 Every agent call used to be silent until its stage finished — no visibility
@@ -131,6 +145,17 @@ It's now captured in `log_path` regardless.
 `new_run_log_path` — previously duplicated between `main.py`'s own copy and
 (implicitly) nowhere else, since `run.py` had no filename-generation need
 until this.
+
+**Real bug, found live-testing on Windows (2026-08-19)**: `_live_print`
+crashed the whole run with `UnicodeEncodeError` the first time a model's
+reasoning text contained a character outside the Windows console's legacy
+`cp1252` codepage (e.g. `→`) — killed a live DVWA run mid-exploit-stage over
+cosmetic terminal output. Fixed with a fallback that re-encodes with
+`errors="replace"` in the terminal's actual encoding when the direct print
+raises; the JSONL log (`_append_log`) always gets the original, untruncated
+text regardless — this only affects what reaches the terminal. Regression
+test in `tests/test_live_logging.py` reproduces the exact failure via a fake
+cp1252-emulating `stdout`.
 
 ## HITL approval gate — three modes, `hitl_mode`, default `auto`
 
@@ -373,7 +398,59 @@ The server exposes everything; each agent narrows what it sees via
   recon/exploit tools; it can only reproduce recorded attempts, not invent new
   ones. Enforced at the schema level, not just by prompt.
 
-## Three-agent flow & findings.json
+## Three-agent flow & mission storage (MongoDB, Phase 3)
+
+**Status: shipped (2026-08-19)** — replaced `findings.json` with
+`findings_store.py`'s `FindingsStore`, a thin wrapper around
+`pymongo.MongoClient`. One document per mission in the `ronin.missions`
+collection (`_id`, `target`, `objective`, `created_at`, `budget_usd`,
+`findings`, `stage_usage`). Deliberately not a bigger change than that:
+`FindingsStore.save_findings(mission_id, findings)` rewrites the whole
+embedded `findings` list wholesale (`$set`), exactly mirroring the old
+file-based `_save_findings`'s "load the whole list, mutate it, rewrite the
+whole thing" pattern — the claim-state-machine logic in
+recon/exploit/verify's `loop.py` didn't change at all, only the two lines
+of I/O around it (`store.load_findings(mission_id)` /
+`store.save_findings(mission_id, findings)` in place of `json.load`/
+`json.dump` on a path). No separate per-finding documents, no schema
+migration machinery — nothing in the pipeline has ever needed more
+granularity than that.
+
+`run.py` creates a mission at startup (`store.create_mission(target,
+objective, budget_usd)`) and prints the mission id; `--mission-id` resumes
+an existing one (skips recon if it already has findings — a real, if basic,
+resume path `findings.json` never had, since starting over meant literally
+starting over). `--mongo-uri` (default `mongodb://localhost:27017`) points
+at any MongoDB instance; `docker-compose.yml` starts a local one
+(`docker-compose up -d mongo`).
+
+Mission-level cost tracking, the other thing Phase 3 was slated to add: each
+stage's summed `Usage` dict is written to `stage_usage.<stage>` on the
+mission document (`store.record_stage_usage`) as it finishes, and `run.py`'s
+new `--budget-usd` checks cumulative estimated cost between stages (not
+mid-stage — the same estimate the existing per-stage cost lines already
+print, `models.estimate_cost_usd`), stopping before starting a stage that
+would exceed the cap rather than letting the run barrel through it. This is
+the same "approximate, same-session ballpark" caveat as the existing cost
+tracking — not a hard billing guarantee.
+
+**The MCP server subprocess also needed to reach Mongo**, not just the host
+process: `categories/verify.py`'s `replay_probe` looks up a finding's
+winning attempt, and it runs inside `ronin-tools-mcp/server.py`'s spawned
+subprocess (separate process, own `sys.path`, no access to the host's
+`FindingsStore` instance). Rather than making `categories/verify.py` know
+about Mongo directly, `run_replay_probe(scope, executor, timeouts, findings,
+finding_id)` now takes an already-loaded `findings` list — pure data, no
+storage awareness — and `register(mcp, scope, executor, timeouts,
+findings_loader)` takes a zero-arg callable instead, called fresh on every
+`replay_probe` invocation. `server.py`'s `build_server` is the only place
+that knows about Mongo: given `--mongo-uri`/`--mission-id` (deferred
+import of `findings_store` so recon/exploit's server spawns, which pass
+neither, never need `pymongo` importable at all), it builds
+`findings_loader = lambda: store.load_findings(mission_id)` and passes that
+through. `agent_core.mcp_server_params` takes `mongo_uri`/`mission_id`
+instead of the old `findings_path`, threaded from `verify_agent/loop.py`
+the same way the old `findings_path` was.
 
 Each agent processes findings one at a time in its own fresh conversation (own
 iteration/time budget), claiming a finding by advancing its status first, then
@@ -390,8 +467,10 @@ code, not via the model.
 - verify → each `exploited`: `verifying → verified | false_positive |
   unverifiable | verify_incomplete`, appends to `verify_attempts`.
   `replay_probe` (`categories/verify.py`'s `run_replay_probe`) reads the
-  winning attempt from findings.json (server gets `--findings-path`) and
-  walks its recorded tool calls (capped at 12 *actually replayed* calls —
+  winning attempt from the mission's findings (server gets a
+  `findings_loader` callable, backed by Mongo -- see the Phase 3 section
+  above) and walks its recorded tool calls (capped at 12 *actually replayed*
+  calls —
   stub entries for undeclared tools don't count against the cap). For each
   call it either genuinely replays it (real dispatch, `_replay_call`) or, if
   no replay support exists for that tool, returns an explicit
@@ -460,8 +539,10 @@ code, not via the model.
   so needed no change. 10 new regression tests reproduce the exact recorded
   shapes from the live run that crashed.
 
-Schema: `{"findings": [{id, type, target, evidence, status, discovered_by,
-exploit_attempts:[...], verify_attempts:[...]}]}`.
+Schema (the mission document's `findings` field, unchanged from the old
+`findings.json`'s top-level `"findings"` array): `[{id, type, target,
+evidence, status, discovered_by, exploit_attempts:[...],
+verify_attempts:[...]}]`.
 
 ## execute_python sandbox (the one genuinely risky tool)
 
@@ -572,12 +653,14 @@ shell, no quoting needed for the script content itself.
 
 ## Deliberate non-goals (do not add without being asked)
 
-No Kafka, no Postgres/database, no service framework, no message queue, no
-dynamic agent graph, no FOURTH agent, no scoring/severity ranking. State is
-files (`findings.json`). Orchestration is `run.py` running three loops in
-sequence. `loop.py` is async only because the MCP client requires it, not as a
-step toward concurrency. Keeping the whole thing readable top-to-bottom is a
-hard constraint.
+No Kafka, no service framework, no message queue, no dynamic agent graph, no
+FOURTH agent, no scoring/severity ranking. MongoDB (Phase 3, see above) is
+the one deliberate exception to "no database" — planned on the roadmap from
+the start, not a drift toward a service architecture; state is still one
+document per mission, no collection sprawl, no ORM. Orchestration is
+`run.py` running three loops in sequence. `loop.py` is async only because
+the MCP client requires it, not as a step toward concurrency. Keeping the
+whole thing readable top-to-bottom is a hard constraint.
 
 ## Test targets (all local, authorized)
 
@@ -604,9 +687,14 @@ builds the ~4.3GB image incl. metasploit-framework), `test_metasploit.py`
 (unit, mocked, resource-script construction + injection guard + lport range)
 + `test_metasploit_integration.py` (real Docker, confirms
 metasploit-framework is installed and a real module run completes without
-hanging). NOTE: `test_execute_python.py` currently *errors* (not skips)
-when the Docker daemon is down — its guard only checks the binary exists.
-Harmless; a known 2-line fix if it annoys you.
+hanging), `test_findings_store.py` (unit, `pytest.importorskip("mongomock")`
+-- FindingsStore against `mongomock.MongoClient` monkeypatched in for
+`pymongo.MongoClient`, no real MongoDB needed). NOTE: `test_execute_python.py`
+currently *errors* (not skips) when the Docker daemon is down — its guard
+only checks the binary exists. Harmless; a known 2-line fix if it annoys
+you. `test_verify.py`/`test_replay_coverage.py`'s `run_replay_probe` calls
+now pass an in-memory findings list, not a path -- matches the Phase 3
+signature change, no real Mongo needed for these either.
 
 ## Current state
 
@@ -632,4 +720,13 @@ Harmless; a known 2-line fix if it annoys you.
   support by explicit user choice, the one deliberate exception to this
   repo's fixed-enum-everywhere discipline. Live pipeline check against real
   Metasploitable pending for both the recon-agent-level-access fix and
-  `metasploit`. See `docs/roadmap.md` for the full phase plan.
+  `metasploit`. Phase 3 (MongoDB mission storage, replacing `findings.json`
+  -- `findings_store.py`, mission-level budget tracking via `--budget-usd`)
+  implemented, unit-tested (`mongomock`), and now live-tested end-to-end
+  against real MongoDB + real DVWA (2026-08-19, two full recon->exploit->
+  verify runs on OpenRouter models) -- mission creation, `--mission-id`
+  resume after a mid-run crash, per-stage usage recording, and the
+  MCP-subprocess's own Mongo connection for `replay_probe` all confirmed
+  working on real data, not just mocked. Live pipeline check against real
+  Metasploitable specifically (as opposed to DVWA) is still the one
+  remaining pending item. See `docs/roadmap.md` for the full phase plan.

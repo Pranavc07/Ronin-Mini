@@ -4,7 +4,7 @@ the winning attempt's recorded tool calls. It cannot discover, explore, or
 invent new attempts; it can only reproduce what already happened and judge
 whether the claimed impact still holds.
 
-Reads findings.json, processes each status == "exploited" finding one at a time
+Reads findings from the mission's Mongo document (via findings_store), processes each status == "exploited" finding one at a time
 in its own fresh conversation (claim pattern: exploited -> verifying ->
 verified | false_positive | unverifiable | verify_incomplete), appending its
 own reasoning to a new verify_attempts field on the finding.
@@ -29,6 +29,7 @@ from mcp.client.stdio import stdio_client
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 import agent_core  # noqa: E402
 import models  # noqa: E402
+from findings_store import FindingsStore  # noqa: E402
 from models import sum_usage  # noqa: E402
 
 ALLOWED_CATEGORIES = {"verify"}
@@ -67,11 +68,6 @@ def build_system_prompt(target: str, finding: dict, tool_defs: list[dict], injec
         verify_start=VERIFY_START,
         verify_end=VERIFY_END,
     )
-
-
-def _save_findings(findings_path: str, findings: list[dict]) -> None:
-    with open(findings_path, "w", encoding="utf-8") as f:
-        json.dump({"findings": findings}, f, indent=2)
 
 
 async def _process_one_finding(
@@ -144,8 +140,10 @@ async def _process_one_finding(
 async def run_verify_agent(
     target: str,
     scope_dir: str,
-    findings_path: str,
+    store: FindingsStore,
+    mission_id: str,
     model: str,
+    mongo_uri: str = "mongodb://localhost:27017",
     provider: str = "anthropic",
     hitl_mode: str = "auto",
     per_finding_max_iterations: int = 6,
@@ -157,13 +155,16 @@ async def run_verify_agent(
     if allowed_hosts is None:
         allowed_hosts = [urlparse(target).hostname or target]
 
-    with open(findings_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    findings = data.get("findings", [])
+    findings = store.load_findings(mission_id)
 
     model_adapter = models.build_adapter(provider, model)
-    # The server needs the findings path so replay_probe can look up winning attempts.
-    server_params = agent_core.mcp_server_params(scope_dir, allowed_hosts, findings_path=findings_path)
+    # The server needs mongo_uri/mission_id so replay_probe can look up winning
+    # attempts directly from the mission document (it runs in a separate
+    # subprocess, so it opens its own Mongo connection rather than sharing
+    # `store`).
+    server_params = agent_core.mcp_server_params(
+        scope_dir, allowed_hosts, mongo_uri=mongo_uri, mission_id=mission_id
+    )
 
     processed = 0
     attempt_usages: list[dict] = []
@@ -182,7 +183,7 @@ async def run_verify_agent(
                     continue
 
                 finding["status"] = "verifying"
-                _save_findings(findings_path, findings)
+                store.save_findings(mission_id, findings)
 
                 attempt, outcome_status = await _process_one_finding(
                     model_adapter,
@@ -199,13 +200,16 @@ async def run_verify_agent(
                 )
                 finding.setdefault("verify_attempts", []).append(attempt)
                 finding["status"] = outcome_status
-                _save_findings(findings_path, findings)
+                store.save_findings(mission_id, findings)
                 processed += 1
                 attempt_usages.append(attempt["usage"])
+
+    total_usage = sum_usage(*attempt_usages)
+    store.record_stage_usage(mission_id, "verify", total_usage)
 
     return {
         "processed": processed,
         "total_findings": len(findings),
-        "findings_path": findings_path,
-        "usage": sum_usage(*attempt_usages),
+        "mission_id": mission_id,
+        "usage": total_usage,
     }

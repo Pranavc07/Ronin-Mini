@@ -1,6 +1,7 @@
 """recon_agent: explores the target using recon + fileops tools only, and
-writes structured candidate findings to findings.json for exploit_agent to
-pick up. Does not attempt exploitation itself -- that's exploit_agent's job.
+writes structured candidate findings to the mission's Mongo document (via
+findings_store.FindingsStore) for exploit_agent to pick up. Does not attempt
+exploitation itself -- that's exploit_agent's job.
 """
 
 import json
@@ -15,6 +16,7 @@ from mcp.client.stdio import stdio_client
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 import agent_core  # noqa: E402
 import models  # noqa: E402
+from findings_store import FindingsStore  # noqa: E402
 
 ALLOWED_CATEGORIES = {"recon", "fileops", "network_exploit"}
 
@@ -35,17 +37,13 @@ def build_system_prompt(target: str, objective: str, tool_defs: list[dict], inje
     )
 
 
-def _write_findings(findings_path: str, findings: list[dict]) -> None:
-    with open(findings_path, "w", encoding="utf-8") as f:
-        json.dump({"findings": findings}, f, indent=2)
-
-
 async def run_recon_agent(
     target: str,
     objective: str,
     scope_dir: str,
     model: str,
-    findings_path: str,
+    store: FindingsStore,
+    mission_id: str,
     provider: str = "anthropic",
     hitl_mode: str = "auto",
     max_iterations: int = 40,
@@ -107,7 +105,8 @@ async def run_recon_agent(
             }
         )
 
-    _write_findings(findings_path, findings)
+    store.save_findings(mission_id, findings)
+    store.record_stage_usage(mission_id, "recon", result["usage"])
 
     return {
         "metadata": {
@@ -119,6 +118,6 @@ async def run_recon_agent(
             "usage": result["usage"],
         },
         "transcript": result["transcript"],
-        "findings_path": findings_path,
+        "mission_id": mission_id,
         "findings_count": len(findings),
     }

@@ -14,7 +14,6 @@ below would have caught that at commit time.
 Run with: pytest tests/test_verify.py -v
 """
 
-import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -241,10 +240,12 @@ def test_metasploit_only_attempt_is_now_replayable():
 # found nothing".
 
 
-def _write_findings(tmp_path, findings: dict) -> str:
-    path = tmp_path / "findings.json"
-    path.write_text(json.dumps(findings), encoding="utf-8")
-    return str(path)
+def _findings_list(data: dict) -> list[dict]:
+    """run_replay_probe now takes an already-loaded findings list (Phase 3:
+    Mongo-backed storage via findings_store.FindingsStore, not a JSON path)
+    -- this just unwraps the old {"findings": [...]} test fixture shape.
+    """
+    return data["findings"]
 
 
 def _metasploit_finding(finding_id="f2"):
@@ -293,11 +294,11 @@ def test_metasploit_winning_attempt_is_replayed_for_real_not_stubbed(tmp_path):
     CVE-2011-2523 shape from the real Metasploitable run that surfaced the
     original bug.
     """
-    findings_path = _write_findings(tmp_path, _metasploit_finding())
+    findings = _findings_list(_metasploit_finding())
 
     with patch("categories.verify.run_metasploit", return_value={"session_opened": True}) as mock_run, \
          patch("categories.verify.run_searchsploit", return_value={"ok": True}):
-        result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings_path, "f2")
+        result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings, "f2")
 
     assert result["any_call_replayed"] is True
     assert result["unreplayable_call_count"] == 0
@@ -339,9 +340,9 @@ def test_unknown_future_tool_gets_explicit_stub_not_silently_dropped(tmp_path):
             }
         ]
     }
-    findings_path = _write_findings(tmp_path, findings)
+    findings = _findings_list(findings)
 
-    result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings_path, "f99")
+    result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings, "f99")
 
     assert result["any_call_replayed"] is False
     assert result["unreplayable_call_count"] == 1
@@ -372,10 +373,10 @@ def test_mixed_replayable_and_unreplayable_calls_both_appear(tmp_path):
             }
         ]
     }
-    findings_path = _write_findings(tmp_path, findings)
+    findings = _findings_list(findings)
 
     with patch("categories.verify.run_nmap", return_value={"ok": True}):
-        result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings_path, "f3")
+        result = verify.run_replay_probe(_scope(), _executor(), TIMEOUTS, findings, "f3")
 
     assert result["any_call_replayed"] is True
     assert result["replayed_call_count"] == 1

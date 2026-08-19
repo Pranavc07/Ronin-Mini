@@ -166,10 +166,18 @@ tools have grown provider-specific assumptions):
   LHOST networking caveat (operator-supplied, not auto-detected).
 
 ## Phase 3 — MongoDB (replaces findings.json)
+**Status: shipped, live-tested end-to-end against DVWA (2026-08-19) — two full recon→exploit→verify runs (Qwen3.6 Plus, GLM 5.2) confirmed mission creation, `--mission-id` resume after a mid-run crash, per-stage `stage_usage` recording, and the MCP-subprocess's own Mongo connection for `replay_probe` all work on real data**
+**Test against: Metasploitable still pending (DVWA only so far) — this phase changes storage, not agent behavior, so any prior live-tested target is a valid regression check**
+
 - Skip SQLite as an intermediate step — you're running a DB server eventually regardless (Redis + dashboard both assume one), and Mongo's flexible schema fits the genuinely heterogeneous tool output you're about to ingest (nmap XML, sqlmap output, Burp results all look structurally different).
-- Same claim-state-machine logic (`new → claimed → exploited/dead-end → verified/false_positive`), now backed by a real document store instead of a JSON file.
-- Add mission-level token/cost budget tracking here — natural fit once you're in a real DB.
+- Same claim-state-machine logic (`new → claimed → exploited/dead-end → verified/false_positive`), now backed by a real document store instead of a JSON file. `findings_store.py`'s `FindingsStore` wraps `pymongo.MongoClient`: one document per mission in the `ronin.missions` collection, `findings` embedded as a list and rewritten wholesale on every save (`$set`) — mirrors the old file-based `_save_findings`'s "load, mutate, rewrite" pattern exactly, so `recon_agent`/`exploit_agent`/`verify_agent`'s `loop.py` logic didn't need to change, only the I/O calls around it.
+- Added mission-level token/cost budget tracking as planned: `stage_usage.<stage>` on the mission document (`store.record_stage_usage`), and `run.py --budget-usd` checks cumulative estimated cost between stages, stopping before a stage that would exceed the cap.
+- `run.py` creates a mission at startup and prints its id; `--mission-id` resumes an existing one (skips recon if it already has findings) instead of starting over from scratch — a real resume path `findings.json` never had.
+- `categories/verify.py`'s `replay_probe` runs inside a separate MCP-server subprocess with no access to the host's `FindingsStore`, so it needed its own path to Mongo: `run_replay_probe`/`register()` were decoupled from storage entirely (they take an already-loaded findings list / a `findings_loader` callable, no Mongo awareness), and `server.py`'s `build_server` is the only place that constructs a real `FindingsStore` from `--mongo-uri`/`--mission-id` (deferred-imported, so recon/exploit's server spawns — which pass neither — never need `pymongo` importable).
+- `docker-compose.yml` added for a one-line local Mongo (`docker-compose up -d mongo`); `--mongo-uri` points at any other instance.
 - Deliberately learn Mongo's document model properly at this stage rather than treating it as plumbing — the whole point is understanding every layer.
+- Live-tested 2026-08-19 against DVWA: confirmed the full recon→exploit→verify pipeline behaves correctly on real Mongo (not mongomock), `--mission-id` resume works after a real mid-run crash, and `--budget-usd` tracking works across stages. Two real bugs surfaced and fixed during this pass, unrelated to the storage migration itself: a Windows-console Unicode crash in the live-logging code, and a pricing-table bug that mispriced both OpenRouter models tested (see `docs/progress.md`'s 2026-08-19 entry for both).
+- NEXT: no committed next step for Phase 3 itself. A live check against Metasploitable (network-layer findings, not just web-layer) would be the remaining cross-check if it comes up.
 
 ## Phase 4 — Burp Suite Integration (Collaborator)
 **Test against: PortSwigger Web Security Academy blind SSRF/XXE labs**
