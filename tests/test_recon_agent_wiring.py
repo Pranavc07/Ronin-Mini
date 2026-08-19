@@ -18,9 +18,9 @@ from mcp.client.stdio import stdio_client
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
 
-import agent_core  # noqa: E402
-import recon_agent.loop as recon_loop  # noqa: E402
-import exploit_agent.loop as exploit_loop  # noqa: E402
+from ronin_mini import agent_core  # noqa: E402
+import ronin_mini.recon_agent.loop as recon_loop  # noqa: E402
+import ronin_mini.exploit_agent.loop as exploit_loop  # noqa: E402
 
 NETWORK_EXPLOIT_TOOLS = {"nmap", "nikto", "sqlmap", "hydra", "gobuster", "enum4linux", "searchsploit"}
 
@@ -53,6 +53,6 @@ def test_recon_agent_actually_sees_all_seven_kali_tools(tmp_path):
 
 
 def test_verify_agent_still_isolated():
-    import verify_agent.loop as verify_loop
+    import ronin_mini.verify_agent.loop as verify_loop
 
     assert verify_loop.ALLOWED_CATEGORIES == {"verify"}

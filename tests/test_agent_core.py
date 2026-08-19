@@ -17,12 +17,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
-sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin-tools-mcp"))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin_mini", "ronin-tools-mcp"))
 
-import agent_core  # noqa: E402
+from ronin_mini import agent_core  # noqa: E402
 from manifest import ToolMeta, load_manifest  # noqa: E402
-from models.anthropic_adapter import AnthropicAdapter  # noqa: E402
-from models.base import ModelAdapter, ModelResponse, ToolCall, ToolResult, Turn  # noqa: E402
+from ronin_mini.models.anthropic_adapter import AnthropicAdapter  # noqa: E402
+from ronin_mini.models.base import ModelAdapter, ModelResponse, ToolCall, ToolResult, Turn  # noqa: E402
 
 GATED_MANIFEST = load_manifest()  # probe_variant/execute_python/replay_probe are require_approval: true
 UNGATED_TOOL = "http_request"

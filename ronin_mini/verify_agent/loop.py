@@ -18,19 +18,16 @@ verdict was reached before the budget ran out.
 """
 
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-import agent_core  # noqa: E402
-import models  # noqa: E402
-from findings_store import FindingsStore  # noqa: E402
-from models import sum_usage  # noqa: E402
+from .. import agent_core
+from .. import models
+from ..findings_store import FindingsStore
+from ..models import sum_usage
 
 ALLOWED_CATEGORIES = {"verify"}
 

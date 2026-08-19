@@ -22,7 +22,7 @@ from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import agent_core  # noqa: E402
+from ronin_mini import agent_core  # noqa: E402
 
 DOCKER_AVAILABLE = shutil.which("docker") is not None
 

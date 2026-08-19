@@ -1,0 +1,7 @@
+recursive-include ronin_mini/agents *.md
+recursive-include ronin_mini/skills *.md
+recursive-include ronin_mini/ronin-tools-mcp *
+recursive-exclude ronin_mini/ronin-tools-mcp __pycache__ *
+prune ronin_mini/ronin-tools-mcp/.pytest_cache
+global-exclude __pycache__
+global-exclude *.py[cod]

@@ -12,12 +12,14 @@ import argparse
 import os
 import sys
 
-# Run as a plain script, not an installed package -- put this directory on
-# sys.path so `import manifest`, `import scope`, etc. resolve regardless of
-# the caller's own working directory. Also put the repo root on sys.path so
-# `import findings_store` resolves -- this subprocess is spawned with no
-# guarantee the root dir is already on sys.path (unlike recon_agent/loop.py
-# etc, which live under the root and get it via a relative sys.path.insert).
+# This directory's name has a hyphen, so it can never be `import`ed as a
+# real Python package -- server.py is always run as a spawned subprocess by
+# file path (see agent_core.mcp_server_params), never imported. Put this
+# directory on sys.path so `import manifest`, `import scope`, etc. resolve
+# regardless of the caller's own working directory. Also put the parent
+# (ronin_mini/) on sys.path so `import findings_store` resolves -- this
+# subprocess has no guarantee that directory is already on sys.path, unlike
+# same-package modules that reach it via a relative import.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 

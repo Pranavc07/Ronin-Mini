@@ -21,7 +21,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SERVER_PATH = os.path.join(_REPO_ROOT, "ronin-tools-mcp", "server.py")
+_SERVER_PATH = os.path.join(_REPO_ROOT, "ronin_mini", "ronin-tools-mcp", "server.py")
 RG_AVAILABLE = shutil.which("rg") is not None
 
 

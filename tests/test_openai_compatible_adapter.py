@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
 
-from models.base import ToolCall, ToolResult, Turn, Usage  # noqa: E402
-from models.openai_compatible_adapter import OpenAICompatibleAdapter  # noqa: E402
+from ronin_mini.models.base import ToolCall, ToolResult, Turn, Usage  # noqa: E402
+from ronin_mini.models.openai_compatible_adapter import OpenAICompatibleAdapter  # noqa: E402
 
 
 def _adapter() -> OpenAICompatibleAdapter:

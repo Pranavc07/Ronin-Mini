@@ -22,7 +22,7 @@ import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client  # noqa: F401  (re-exported for callers)
 
-from models import ModelAdapter, ToolResult, Turn, Usage  # noqa: E402
+from .models import ModelAdapter, ToolResult, Turn, Usage  # noqa: E402
 
 TOOL_TIMEOUT_SECONDS = 15
 

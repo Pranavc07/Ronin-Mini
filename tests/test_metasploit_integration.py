@@ -23,8 +23,8 @@ import urllib.request
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ronin-tools-mcp"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ronin_mini"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ronin_mini", "ronin-tools-mcp"))
 
 import executor  # noqa: E402
 from categories import metasploit as ms  # noqa: E402

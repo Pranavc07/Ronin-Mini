@@ -10,7 +10,7 @@ import sys
 from unittest.mock import MagicMock
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin-tools-mcp"))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin_mini", "ronin-tools-mcp"))
 
 from categories import metasploit as ms  # noqa: E402
 from scope import Scope  # noqa: E402

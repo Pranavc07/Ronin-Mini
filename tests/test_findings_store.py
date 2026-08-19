@@ -16,12 +16,12 @@ mongomock = pytest.importorskip("mongomock")
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
 
-from findings_store import FindingsStore, MissionNotFound  # noqa: E402
+from ronin_mini.findings_store import FindingsStore, MissionNotFound  # noqa: E402
 
 
 @pytest.fixture
 def store(monkeypatch):
-    monkeypatch.setattr("findings_store.MongoClient", mongomock.MongoClient)
+    monkeypatch.setattr("ronin_mini.findings_store.MongoClient", mongomock.MongoClient)
     return FindingsStore(mongo_uri="mongodb://localhost:27017", db_name="ronin_test")
 
 

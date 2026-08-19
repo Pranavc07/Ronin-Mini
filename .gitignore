@@ -5,5 +5,8 @@ transcript_*.json
 findings.json
 findings_*.json
 .env
-ronin-tools-mcp/data/enterprise-attack-raw.json
+ronin_mini/ronin-tools-mcp/data/enterprise-attack-raw.json
 logs/
+dist/
+build/
+*.egg-info/

@@ -16,12 +16,12 @@ from unittest.mock import MagicMock
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
-sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin-tools-mcp"))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin_mini", "ronin-tools-mcp"))
 
-import agent_core  # noqa: E402
-from models.anthropic_adapter import AnthropicAdapter  # noqa: E402
-from models.base import ModelAdapter, ModelResponse, Usage  # noqa: E402
-from models.pricing import estimate_cost_usd, sum_usage  # noqa: E402
+from ronin_mini import agent_core  # noqa: E402
+from ronin_mini.models.anthropic_adapter import AnthropicAdapter  # noqa: E402
+from ronin_mini.models.base import ModelAdapter, ModelResponse, Usage  # noqa: E402
+from ronin_mini.models.pricing import estimate_cost_usd, sum_usage  # noqa: E402
 
 # --- Usage dataclass ------------------------------------------------------
 

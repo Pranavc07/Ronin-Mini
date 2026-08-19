@@ -12,9 +12,9 @@ import sys
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
-sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin-tools-mcp"))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin_mini", "ronin-tools-mcp"))
 
-import agent_core  # noqa: E402
+from ronin_mini import agent_core  # noqa: E402
 from categories.attack_reference import run_lookup_attack_technique  # noqa: E402
 
 
@@ -109,7 +109,7 @@ def test_load_skill_missing_type_returns_none():
 
 
 def test_load_skill_all_have_status():
-    skills_dir = os.path.join(_REPO_ROOT, "skills")
+    skills_dir = os.path.join(_REPO_ROOT, "ronin_mini", "skills")
     finding_types = [f[:-3] for f in os.listdir(skills_dir) if f.endswith(".md")]
     assert len(finding_types) == 16  # 14 web-vuln classes + known_vulnerable_service + weak_credentials
     for finding_type in finding_types:
@@ -125,7 +125,7 @@ def test_all_shipped_skills_are_full_with_real_methodology():
     attack_tactic (kept null -- app-specific by nature, no single CWE/ATT&CK
     technique fits), but it must still be status: full with real content.
     """
-    skills_dir = os.path.join(_REPO_ROOT, "skills")
+    skills_dir = os.path.join(_REPO_ROOT, "ronin_mini", "skills")
     finding_types = [f[:-3] for f in os.listdir(skills_dir) if f.endswith(".md")]
     for finding_type in finding_types:
         doc = agent_core.load_skill(finding_type)

@@ -20,9 +20,9 @@ from unittest.mock import MagicMock, patch
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
-sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin-tools-mcp"))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "ronin_mini", "ronin-tools-mcp"))
 
-import exploit_agent.loop as exploit_loop  # noqa: E402
+import ronin_mini.exploit_agent.loop as exploit_loop  # noqa: E402
 from categories import verify  # noqa: E402
 from manifest import load_manifest  # noqa: E402
 from scope import Scope  # noqa: E402

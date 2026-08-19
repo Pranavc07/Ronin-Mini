@@ -11,8 +11,8 @@ from urllib.parse import urlparse
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client
 
-import agent_core
-import models
+from . import agent_core
+from . import models
 
 SYSTEM_PROMPT_TEMPLATE = """You are an authorized penetration testing assistant. You have \
 been explicitly engaged to test the target below for security vulnerabilities. All testing \
