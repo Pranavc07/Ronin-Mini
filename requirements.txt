@@ -5,3 +5,4 @@ dnspython
 mcp
 pyyaml
 pymongo
+cryptography

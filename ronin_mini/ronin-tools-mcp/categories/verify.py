@@ -56,6 +56,7 @@ from .network_exploit import (
     run_searchsploit,
     run_sqlmap,
 )
+from .oob_interaction import run_poll_oob_interactions
 from .web_exploit import run_probe_variant
 
 # A winning attempt occasionally iterated many times (execute_python "write,
@@ -113,7 +114,7 @@ def _coerce_int(value):
     return value
 
 
-def _replay_call(scope, executor, timeouts: dict, tool: str, tool_input: dict):
+def _replay_call(scope, executor, timeouts: dict, tool: str, tool_input: dict, oob_store=None):
     """Dispatch a single replay. Only ever called for tool in REPLAYABLE_TOOLS
     (run_replay_probe below routes replayable: "false" tools to the explicit
     stub before reaching here) -- so the fallback at the bottom firing means a
@@ -206,6 +207,10 @@ def _replay_call(scope, executor, timeouts: dict, tool: str, tool_input: dict):
         )
     if tool == "lookup_attack_technique":
         return run_lookup_attack_technique(tool_input.get("query", ""))
+    if tool == "poll_oob_interactions":
+        return run_poll_oob_interactions(
+            oob_store, tool_input.get("mission_id", ""), tool_input.get("correlation_id", "")
+        )
     return {
         "error": (
             f"tool {tool!r} is declared replayable in manifest.yaml but _replay_call has no "
@@ -238,7 +243,9 @@ def _winning_attempt(finding: dict) -> dict | None:
     return exploited[-1] if exploited else None
 
 
-def run_replay_probe(scope, executor, timeouts: dict, findings: list[dict] | None, finding_id: str) -> dict:
+def run_replay_probe(
+    scope, executor, timeouts: dict, findings: list[dict] | None, finding_id: str, oob_store=None
+) -> dict:
     """The actual replay logic, as a module-level function so it's testable
     without spinning up the MCP server (mirrors every other category's
     run_* / register() split). `findings` is the mission's full findings
@@ -291,7 +298,7 @@ def run_replay_probe(scope, executor, timeouts: dict, findings: list[dict] | Non
             )
             continue
 
-        replay_output = _replay_call(scope, executor, timeouts, tool, tool_input)
+        replay_output = _replay_call(scope, executor, timeouts, tool, tool_input, oob_store)
         replayed_count += 1
         replays.append(
             {
@@ -327,11 +334,16 @@ def run_replay_probe(scope, executor, timeouts: dict, findings: list[dict] | Non
     }
 
 
-def register(mcp, scope, executor, timeouts: dict, findings_loader=None) -> None:
+def register(mcp, scope, executor, timeouts: dict, findings_loader=None, oob_store=None) -> None:
     """findings_loader: an optional zero-arg callable returning the mission's
     current findings list (e.g. `lambda: store.load_findings(mission_id)`).
     Called fresh on every replay_probe invocation rather than snapshotted
     once at server startup, so it always reflects the latest saved state.
+
+    oob_store: same callable server.py threads into categories/
+    oob_interaction.py's register() -- needed here so a replayed
+    poll_oob_interactions call can look up the original session's keys
+    (Phase 4).
     """
 
     def replay_probe(finding_id: str) -> dict:
@@ -345,6 +357,6 @@ def register(mcp, scope, executor, timeouts: dict, findings_loader=None) -> None
         call failed to reproduce; see each entry's "reason".
         """
         findings = findings_loader() if findings_loader is not None else None
-        return run_replay_probe(scope, executor, timeouts, findings, finding_id)
+        return run_replay_probe(scope, executor, timeouts, findings, finding_id, oob_store)
 
     mcp.add_tool(replay_probe)

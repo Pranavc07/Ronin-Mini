@@ -364,8 +364,9 @@ everything before going deep on the first interesting thing it finds.
    ```
 
 2. **`exploit_agent`** (tools: `web_exploit` + `exploit_runtime` +
-   `attack_reference` + `network_exploit` + `metasploit_exploit` — the only
-   agent with Metasploit access) processes each `status: new` finding in its
+   `attack_reference` + `network_exploit` + `metasploit_exploit` +
+   `oob_interaction` — the only agent with Metasploit and out-of-band-testing
+   access) processes each `status: new` finding in its
    own fresh conversation: `new → claimed → exploited | dead-end |
    incomplete`, appending a full attempt record (skill used, CWE, ATT&CK
    technique, transcript, verdict) to `exploit_attempts`. It prefers a
@@ -458,10 +459,45 @@ Gated by HITL like everything else higher-risk here — see
 [`CLAUDE.md`](CLAUDE.md) for the full design writeup, including the
 LHOST-networking caveat for reverse shells.
 
+### Out-of-band testing (`oob_interaction`, `exploit_agent`-only, Phase 4)
+
+`generate_oob_url` + `poll_oob_interactions` confirm blind SSRF/XXE/
+command-injection — cases where the target's direct HTTP response can't
+show the effect (e.g. it fetches a URL server-side but never echoes the
+result). Backed by [interactsh](https://github.com/projectdiscovery/interactsh),
+the free, open-source OOB interaction service — **not Burp Collaborator**,
+which requires a paid Burp Suite Professional license and would make this
+capability inaccessible to anyone using `ronin-mini` without one.
+
+`generate_oob_url` registers a fresh session (its own RSA keypair,
+correlation id, secret key — generated client-side, persisted per-mission
+via `FindingsStore` so a later `poll_oob_interactions` call, including one
+made much later during `verify_agent`'s replay in a completely separate
+process, can still decrypt interactions on it) and returns a unique URL to
+embed in a payload. `poll_oob_interactions` checks whether the target
+actually reached out to it — a real DNS/HTTP callback is direct,
+independent proof of impact that doesn't depend on any response content
+leaking back at all. No official Python client exists for interactsh, so
+the protocol (RSA-OAEP key exchange, AES-CTR interaction decryption) is
+implemented directly against interactsh's own Go client/server source —
+see `categories/oob_interaction.py`'s module docstring for the exact
+reasoning, and `tests/test_oob_interaction.py` for a real (not mocked)
+crypto round-trip proving the decryption is protocol-compatible.
+
+`generate_oob_url` is declared `replayable: "false"` in `manifest.yaml` —
+re-registering a fresh session during `verify_agent`'s replay proves
+nothing about the original finding. The actual replay value is in the
+payload call that used the URL (already replayable via its own tool) plus
+a fresh `poll_oob_interactions` call on the *same* correlation id, which
+**is** replayable (`"partial"` — interactsh retains interactions only for a
+limited server-side TTL, a live-environment caveat, not a coverage gap;
+same category as `hydra`/`metasploit`).
+
 ## Tools available to the agents
 
-Tools are implemented in [`ronin-tools-mcp/`](ronin-tools-mcp), organized by
-category (see [`manifest.yaml`](ronin-tools-mcp/manifest.yaml) for the full
+Tools are implemented in [`ronin_mini/ronin-tools-mcp/`](ronin_mini/ronin-tools-mcp),
+organized by category (see
+[`manifest.yaml`](ronin_mini/ronin-tools-mcp/manifest.yaml) for the full
 registry — name, category, description, timeout, HITL default).
 
 | Category | Tools | Gated? |
@@ -474,6 +510,7 @@ registry — name, category, description, timeout, HITL default).
 | `verify` | `replay_probe` | yes |
 | `network_exploit` | `nmap`, `nikto`, `sqlmap`, `hydra`, `gobuster`, `enum4linux`, `searchsploit` | yes |
 | `metasploit_exploit` | `metasploit` | yes |
+| `oob_interaction` | `generate_oob_url`, `poll_oob_interactions` (interactsh-backed out-of-band testing) | yes |
 
 ### Per-agent tool allowlisting
 
@@ -484,7 +521,7 @@ conversation:
 
 - **recon_agent**: `recon`, `fileops`, `network_exploit`
 - **exploit_agent**: `web_exploit`, `exploit_runtime`, `attack_reference`,
-  `network_exploit`, `metasploit_exploit`
+  `network_exploit`, `metasploit_exploit`, `oob_interaction`
 - **verify_agent**: `verify` only
 
 **Scope enforcement** ([`ronin-tools-mcp/scope.py`](ronin-tools-mcp/scope.py))
@@ -532,6 +569,10 @@ Notable files:
   `pymongo.MongoClient`; runs without MongoDB installed at all
   (`pytest.importorskip("mongomock")` skips it if that package isn't
   present, rather than failing).
+- `test_oob_interaction.py` — unit, mocked interactsh HTTP calls, but the
+  RSA-OAEP/AES-CTR decryption is tested for real (a genuine keypair,
+  genuine encryption against it, genuine decryption back) — not just that
+  mocks were called.
 
 ## What this is *not*
 

@@ -57,6 +57,7 @@ _DISPATCH_TARGETS = {
     "searchsploit": "run_searchsploit",
     "metasploit": "run_metasploit",
     "lookup_attack_technique": "run_lookup_attack_technique",
+    "poll_oob_interactions": "run_poll_oob_interactions",
 }
 
 

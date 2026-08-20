@@ -35,12 +35,22 @@ accepted.
    — point the external entity at an internal/loopback URL you control the
    interpretation of, same signal logic as the SSRF skill (differing
    response/error/timing vs a clearly-external target).
-5. **Be explicit about the limitation for blind XXE.** Out-of-band
-   techniques (external DTD hosted on a listener you control, exfiltrating
-   data via a follow-up request) need callback infrastructure this harness
-   doesn't have yet — if in-band file-read and SSRF-style probes both show
-   nothing, say clearly that blind/OOB XXE is unconfirmable with current
-   tooling rather than guessing.
+5. **Blind XXE: use out-of-band confirmation.** If in-band file-read and
+   SSRF-style probes both show nothing, call `generate_oob_url` and
+   reference it in the external entity/DTD instead of a local file or
+   internal target:
+   ```xml
+   <?xml version="1.0"?>
+   <!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://<oob-url>/">]>
+   <foo>&xxe;</foo>
+   ```
+   Then `poll_oob_interactions` with the same correlation_id — a real
+   callback means the parser resolved the external entity, direct proof of
+   XXE with no dependence on any content reflecting back. A full external-
+   DTD/data-exfiltration chain (parameter entities pulling a local file's
+   content into the OOB request path) is a further escalation once basic
+   entity resolution is confirmed this way, not required for the base
+   finding.
 
 ## Response signatures
 
@@ -68,3 +78,5 @@ accepted.
 - `probe_variant` can work if the XML payload itself is the only thing that
   varies between baseline and variant and both are simple POST bodies —
   baseline = legitimate XML, variant = XXE payload.
+- `generate_oob_url` + `poll_oob_interactions` for the blind case — see
+  step 5.

@@ -5,6 +5,94 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-19 — Phase 4: out-of-band testing via interactsh (not Burp Collaborator)
+- User asked to continue with the roadmap's Phase 4 (originally framed as
+  "Burp Suite Integration (Collaborator)"). Flagged a real access-cost
+  problem before writing any code: Burp Collaborator's polling API needs a
+  paid Burp Suite Professional license, which would make this capability
+  inaccessible to anyone using `ronin-mini` without one -- cuts against the
+  OSS spirit of the repo. User chose
+  [interactsh](https://github.com/projectdiscovery/interactsh) instead
+  (free, open-source, self-hostable, mechanically equivalent) over both
+  Burp Collaborator and a build-both-backends abstraction.
+- No official Python interactsh client exists on PyPI (only Go, plus one
+  unofficial GitHub-only port) -- researched the actual protocol from
+  interactsh's own Go client/server source (register/poll endpoints, RSA-
+  OAEP key exchange, AES-CTR interaction decryption, retention/TTL
+  behavior) rather than guessing or pulling in an unmaintained third-party
+  dependency, then implemented it directly in `categories/oob_interaction.py`
+  using `cryptography` (new dependency, added to `requirements.txt`/
+  `pyproject.toml`).
+- New `oob_interaction` category, two tools: `generate_oob_url` (registers
+  a session, returns a payload URL) and `poll_oob_interactions` (checks for
+  callbacks) -- both `exploit_agent`-only, not `verify_agent` as the
+  original roadmap sketch implied, since `exploit_agent` is the one that
+  actually crafts the payload embedding the OOB URL.
+- Real design constraint worked through before coding: session keys (RSA
+  private key, secret) must be persisted somewhere durable, not held in the
+  MCP server subprocess's memory, since `exploit_agent` and `verify_agent`
+  each spawn their *own* fresh subprocess -- a keypair generated during
+  exploit's conversation would be gone by the time verify's replay tries to
+  poll the same session later. Extended `findings_store.FindingsStore` with
+  `save_oob_session`/`get_oob_session` (an `oob_sessions` dict embedded on
+  the mission document, same "one document per mission" discipline as
+  everything else there). `server.py`'s `build_server` now also threads
+  `mongo_uri`/`mission_id` into `exploit_agent`'s server spawn (previously
+  verify-only), since exploit_agent is the one that needs this state now.
+- Fits into the *existing* replay-coverage machinery with zero structural
+  changes to `verify_agent` (still only ever calls `replay_probe`):
+  `generate_oob_url` declared `replayable: "false"` in `manifest.yaml`
+  (re-registering a fresh session on replay proves nothing -- the first
+  real case of an exploit-agent-reachable tool declared this way, not just
+  recon/verify-only tools), `poll_oob_interactions` declared `"partial"`
+  (real re-poll, but interactsh's retention TTL is a live-environment
+  caveat, same class as `hydra`/`metasploit`).
+  `tests/test_replay_coverage.py`'s dynamic, manifest-derived checks picked
+  up the new tool automatically -- `test_replayable_true_or_partial_tool_
+  has_real_dispatch` failed exactly as designed until the dispatch was
+  added, and `test_replayable_false_tool_gets_structured_stub_via_
+  run_replay_probe`'s own comment had literally anticipated this exact
+  scenario ("if a real exploit-agent-reachable tool is ever declared
+  'false', exercise the real one instead of a synthetic stand-in").
+- `skills/ssrf.md`, `skills/xxe.md`, `skills/command_injection.md` updated
+  with real OOB methodology, replacing their old "unconfirmable with
+  current tooling, no Collaborator-style infra" language.
+- `agents/exploit.md` gained a `{mission_id}` placeholder (threaded through
+  `build_system_prompt`/`_process_one_finding`/`run_exploit_agent`/`run.py`)
+  so the model knows what mission_id to pass to both new tools.
+- 16 new unit tests (`tests/test_oob_interaction.py`: 10, including a real
+  -- not mocked -- RSA-OAEP/AES-CTR crypto round-trip proving the
+  decryption logic is genuinely protocol-compatible, not just internally
+  self-consistent; `tests/test_findings_store.py`: 6 for the new session
+  methods) plus 1 new dispatch test in `test_verify.py`. Full suite:
+  232/234 pass, 7 skipped (same 2 pre-existing, unrelated failures -- stale
+  tool-list assertion, Docker not running this session).
+- Attempted a real live network smoke test (register against the actual
+  public interactsh servers, bypassing Mongo with a plain in-memory
+  store) before calling this done -- all 6 default servers
+  (oast.pro/live/site/online/fun/me) failed TLS verification from this
+  session's network. Diagnosed the actual cause rather than assuming
+  outage or a code bug: pulled the raw certificate each server presented
+  (unverified connection + `cryptography.x509`) and found the issuer is a
+  **University of Sydney FortiGate SSL-inspection proxy**
+  (`fortigate.sydney.edu.au`), not each server's real cert -- this
+  network is intercepting/re-signing HTTPS to `oast.*` domains
+  specifically (plain `google.com` verifies fine), most likely because
+  OOB-testing domains get flagged by corporate security appliances. Not a
+  bug in `oob_interaction.py`, not a real interactsh outage -- a
+  local-network constraint on this session's own machine. Did not disable
+  certificate verification to work around it (would defeat the actual
+  security property for real users; the synthetic crypto round-trip test
+  is honest evidence the protocol implementation itself is correct,
+  separate from this network's ability to reach the real servers).
+- NEXT: still not live-tested against a real target -- needs a network
+  without this interception (the user's own machine, or wherever this
+  actually gets deployed). A PortSwigger Web Security Academy blind
+  SSRF/XXE lab (purpose-built for this, unlike Juice Shop/DVWA) is the
+  right next check once that's available -- confirms the interactsh
+  round-trip works against the real public interactsh server, not just
+  the synthetic crypto proof in the unit tests.
+
 ## 2026-08-19 — Packaged the core as a real pip library; stood up ronin-pro (Track B split)
 - User decision: split into two repos. `ronin-mini` (this repo) stays the
   public BSL core; a new, proprietary `ronin-pro` repo holds the

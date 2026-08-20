@@ -181,13 +181,19 @@ tools have grown provider-specific assumptions):
 - Live-tested 2026-08-19 against DVWA: confirmed the full recon→exploit→verify pipeline behaves correctly on real Mongo (not mongomock), `--mission-id` resume works after a real mid-run crash, and `--budget-usd` tracking works across stages. Two real bugs surfaced and fixed during this pass, unrelated to the storage migration itself: a Windows-console Unicode crash in the live-logging code, and a pricing-table bug that mispriced both OpenRouter models tested (see `docs/progress.md`'s 2026-08-19 entry for both).
 - NEXT: no committed next step for Phase 3 itself. A live check against Metasploitable (network-layer findings, not just web-layer) would be the remaining cross-check if it comes up.
 
-## Phase 4 — Burp Suite Integration (Collaborator)
+## Phase 4 — Out-of-band testing (interactsh, not Burp Collaborator)
+**Status: implemented and unit-tested (2026-08-19), NOT yet live-tested against a real target**
 **Test against: PortSwigger Web Security Academy blind SSRF/XXE labs**
 
 - The one Pentest Copilot capability that's a genuine non-redundant gap in what you have: out-of-band verification for blind SSRF/XXE/command injection.
-- Fits into `verify_agent`'s toolset — direct response inspection can't catch blind vulns, Collaborator can.
-- Also expose proxy history / Repeater as tools for exploit_agent if useful once you're here.
+- **Reconsidered from the original "Burp Suite Integration (Collaborator)" framing**: Collaborator's polling API requires a paid Burp Suite Professional license, which would make this capability inaccessible to anyone using `ronin-mini` without one -- cuts against the OSS spirit of the repo. Built on [interactsh](https://github.com/projectdiscovery/interactsh) instead: free, open-source, self-hostable, mechanically equivalent (unique subdomains, poll for DNS/HTTP/SMTP callbacks). User decision, made explicitly before any code was written.
+- New `oob_interaction` category (exploit_agent-only, not verify_agent as originally sketched -- exploit_agent is the one that actually crafts the payload embedding the OOB URL, so it needs to *generate* the URL, not just verify after the fact). Two tools: `generate_oob_url` (registers a session, returns a payload URL), `poll_oob_interactions` (checks for callbacks). No official Python interactsh client exists, so the protocol (RSA-OAEP key exchange, AES-CTR interaction decryption) is implemented directly against interactsh's own Go source -- see `CLAUDE.md`'s Phase 4 section for the full protocol writeup.
+- Session keys persisted per-mission via `FindingsStore` (embedded `oob_sessions` dict, keyed by correlation_id) -- required, not a nicety, since exploit_agent and verify_agent spawn separate MCP server subprocesses and a keypair held only in one subprocess's memory wouldn't survive to a later replay.
+- Fits into the *existing* replay-coverage machinery with no structural changes to verify_agent (still only ever calls `replay_probe`): `generate_oob_url` declared `replayable: "false"` (re-registering a session on replay proves nothing), `poll_oob_interactions` declared `replayable: "partial"` (real re-poll, but interactsh's retention TTL is a live-environment caveat, same class as `hydra`/`metasploit`). This is the first real case of an exploit_agent-reachable tool declared `"false"` -- `tests/test_replay_coverage.py`'s dynamic checks picked it up with zero test-logic changes, exactly as that test file's own comments anticipated.
+- `skills/ssrf.md`, `skills/xxe.md`, `skills/command_injection.md` updated with real OOB methodology, replacing their old "unconfirmable with current tooling" language.
+- Proxy history / Repeater tools for exploit_agent (the original roadmap's secondary bullet) not built -- no concrete need identified yet, same "don't build ahead of a real requirement" discipline as everything else here.
 - PortSwigger Academy labs are purpose-built for this and give a clear solved/not-solved signal, unlike Juice Shop/DVWA which don't have much blind-vuln surface.
+- NEXT: live-test against a real target (a PortSwigger blind SSRF/XXE lab) to confirm the interactsh round-trip works end-to-end against a real target, not just the synthetic crypto proof in `tests/test_oob_interaction.py`.
 
 ## Phase 5 — Concurrency + Redis
 - Only once you actually need real concurrent agent execution (the worker-pool model from earlier — multiple exploit_agent instances pulling from a shared task queue) rather than sequential phases.

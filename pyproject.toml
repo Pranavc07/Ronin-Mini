@@ -16,6 +16,7 @@ dependencies = [
     "mcp",
     "pyyaml",
     "pymongo",
+    "cryptography",
 ]
 
 [tool.setuptools.packages.find]

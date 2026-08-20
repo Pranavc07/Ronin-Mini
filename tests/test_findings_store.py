@@ -91,3 +91,41 @@ def test_get_budget_usd_unknown_mission_raises(store):
 
 def test_get_mission_returns_none_for_unknown_id(store):
     assert store.get_mission("does-not-exist") is None
+
+
+def test_create_mission_includes_empty_oob_sessions(store):
+    mission_id = store.create_mission("t", "o")
+    assert store.get_mission(mission_id)["oob_sessions"] == {}
+
+
+def test_save_and_get_oob_session_round_trips(store):
+    mission_id = store.create_mission("t", "o")
+    session = {"secret_key": "sk", "private_key_pem": "pem", "server": "oast.fun", "created_at": "now"}
+
+    store.save_oob_session(mission_id, "corr123", session)
+
+    assert store.get_oob_session(mission_id, "corr123") == session
+
+
+def test_get_oob_session_unknown_correlation_id_returns_none(store):
+    mission_id = store.create_mission("t", "o")
+    assert store.get_oob_session(mission_id, "does-not-exist") is None
+
+
+def test_save_oob_session_unknown_mission_raises(store):
+    with pytest.raises(MissionNotFound):
+        store.save_oob_session("does-not-exist", "corr123", {})
+
+
+def test_get_oob_session_unknown_mission_raises(store):
+    with pytest.raises(MissionNotFound):
+        store.get_oob_session("does-not-exist", "corr123")
+
+
+def test_multiple_oob_sessions_coexist_on_one_mission(store):
+    mission_id = store.create_mission("t", "o")
+    store.save_oob_session(mission_id, "corr1", {"server": "oast.fun"})
+    store.save_oob_session(mission_id, "corr2", {"server": "oast.pro"})
+
+    assert store.get_oob_session(mission_id, "corr1")["server"] == "oast.fun"
+    assert store.get_oob_session(mission_id, "corr2")["server"] == "oast.pro"

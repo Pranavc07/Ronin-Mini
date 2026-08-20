@@ -406,9 +406,10 @@ The server exposes everything; each agent narrows what it sees via
   (Originally scoped to HTTP/DNS-only; deliberately reconsidered -- see
   `docs/roadmap.md`'s Phase 2 section for why.)
 - **exploit_agent**: `{web_exploit, exploit_runtime, attack_reference, network_exploit,
-  metasploit_exploit}` — validates findings. The only agent with `metasploit` access —
+  metasploit_exploit, oob_interaction}` — validates findings. The only agent with
+  `metasploit` and OOB-testing (`generate_oob_url`/`poll_oob_interactions`) access —
   recon can *find* candidates (nmap/searchsploit) but never runs actual exploit
-  modules itself, by explicit design.
+  modules or OOB infrastructure itself, by explicit design.
 - **verify_agent**: `{verify}` — ONLY `replay_probe`. Deliberately cannot reach
   recon/exploit tools; it can only reproduce recorded attempts, not invent new
   ones. Enforced at the schema level, not just by prompt.
@@ -666,6 +667,86 @@ ephemeral containers) — `executor.write_file_in_kali_container()` writes the
 generated resource script in via `docker exec -i ... tee`, stdin-piped, no
 shell, no quoting needed for the script content itself.
 
+## Out-of-band testing (oob_interaction, exploit_agent-only, Phase 4)
+
+Confirms blind SSRF/XXE/command-injection — cases where the target's direct
+HTTP response can't show the effect. Backed by
+[interactsh](https://github.com/projectdiscovery/interactsh), not Burp
+Collaborator — **explicit user choice**: Collaborator's polling API requires
+a paid Burp Suite Professional license, which would make this capability
+inaccessible to anyone using `ronin-mini` without one, cutting against the
+OSS spirit of the repo. interactsh is free, open-source, self-hostable, and
+mechanically equivalent (unique subdomains, poll for DNS/HTTP/SMTP
+callbacks).
+
+**No official Python client exists for interactsh** (only a Go client/
+server and one unofficial, GitHub-only Python port) — `categories/
+oob_interaction.py` implements the protocol directly against interactsh's
+own Go source, using `cryptography` for the crypto (RSA-2048 keypair
+generation, RSA-OAEP key exchange, AES-CTR interaction decryption), not a
+third-party interactsh library:
+- `POST /register` with `{public-key (base64 DER-encoded), secret-key
+  (uuid), correlation-id (20 random chars)}` registers a session.
+- The payload URL is `{correlation_id}{nonce}.{server}` — a fresh nonce per
+  `generate_oob_url` call, so multiple distinct injection points can be
+  told apart, all polled together under the same `correlation_id`.
+- `GET /poll?id={correlation_id}&secret={secret_key}` returns `{aes_key:
+  RSA-OAEP-encrypted, data: [AES-CTR-encrypted interaction...]}`; decrypt
+  the AES key with the session's private key, then each entry (first 16
+  bytes = IV, rest = ciphertext).
+- Default public servers (no auth token needed): `oast.pro`, `oast.live`,
+  `oast.site`, `oast.online`, `oast.fun`, `oast.me` — one is chosen at
+  random per session.
+- `tests/test_oob_interaction.py` proves this against a *real* crypto
+  round-trip (generates an actual keypair, encrypts a synthetic interaction
+  against its real public key the way a real server would, confirms
+  `run_poll_oob_interactions` decrypts it back correctly) — not just that
+  HTTP calls were mocked.
+
+**Session keys are persisted per-mission via `FindingsStore`
+(`save_oob_session`/`get_oob_session`, an `oob_sessions` dict embedded on
+the mission document, keyed by `correlation_id`), not held in the MCP
+server subprocess's memory.** This is required, not a nicety:
+`exploit_agent` and `verify_agent` each spawn their own fresh server
+subprocess (see `server.py`'s `build_server`), so a keypair generated
+during `exploit_agent`'s conversation would be gone by the time
+`verify_agent`'s replay tries to poll the same session in a *separate*
+process, potentially much later. `server.py` threads an `oob_store`
+callable (`(action, mission_id, correlation_id, session) -> dict | None`,
+`action` is `"save"` or `"get"`) into both `oob_interaction.register()` and
+`verify.register()` — the same `mongo_uri`/`mission_id` CLI args that
+already existed for `replay_probe` now also flow into `exploit_agent`'s
+server spawn (previously verify-only), since `exploit_agent` is the one
+that actually calls `generate_oob_url`/`poll_oob_interactions`.
+
+**Replay coverage**: `generate_oob_url` is declared `replayable: "false"` in
+`manifest.yaml` — the *first* real case of an exploit_agent-reachable tool
+declared this way (previously only recon/verify-only tools were, since
+their categories are structurally unreachable by exploit_agent).
+Re-registering a fresh session during replay proves nothing about the
+original finding; the actual replay value is in the payload call that used
+the URL (already replayable via its own tool — `probe_variant`/
+`execute_python`) plus a fresh `poll_oob_interactions` call on the *same*
+`correlation_id`, which **is** replayable (`"partial"` — interactsh retains
+interactions only for a limited server-side TTL, a live-environment
+caveat, not a coverage gap, same category as `hydra`/`metasploit`).
+`tests/test_replay_coverage.py`'s dynamic checks picked this up
+automatically with zero test-logic changes — `test_replayable_false_tool_
+gets_structured_stub_via_run_replay_probe`'s own comment had anticipated
+exactly this scenario ("if a real exploit-agent-reachable tool is ever
+declared 'false', exercise the real one instead of a synthetic stand-in").
+
+`agents/exploit.md` interpolates a new `{mission_id}` placeholder (threaded
+through `build_system_prompt`/`_process_one_finding`/`run_exploit_agent`)
+so the model knows what mission_id to pass to both tools — both take it as
+an explicit parameter rather than the server inferring it, keeping the tool
+interface self-contained and testable without server-side session state.
+
+`skills/ssrf.md`, `skills/xxe.md`, and `skills/command_injection.md` were
+updated to use this instead of their old "unconfirmable with current
+tooling, no Collaborator-style infra" language — real methodology now, not
+a stated limitation.
+
 ## Deliberate non-goals (do not add without being asked)
 
 No Kafka, no service framework, no message queue, no dynamic agent graph, no
@@ -743,5 +824,21 @@ signature change, no real Mongo needed for these either.
   resume after a mid-run crash, per-stage usage recording, and the
   MCP-subprocess's own Mongo connection for `replay_probe` all confirmed
   working on real data, not just mocked. Live pipeline check against real
-  Metasploitable specifically (as opposed to DVWA) is still the one
-  remaining pending item. See `docs/roadmap.md` for the full phase plan.
+  Metasploitable specifically (as opposed to DVWA) is still a pending item.
+  Phase 4 (out-of-band testing via interactsh -- `oob_interaction` category,
+  `generate_oob_url`/`poll_oob_interactions`, exploit_agent-only) implemented
+  and unit-tested, including a real crypto round-trip proof
+  (`tests/test_oob_interaction.py`); interactsh chosen over Burp Collaborator
+  explicitly because Collaborator requires a paid Burp Suite Professional
+  license. `skills/ssrf.md`/`xxe.md`/`command_injection.md` updated with
+  real OOB methodology. NOT yet live-tested against a real target -- a real
+  network smoke test attempt this session found all 6 default interactsh
+  servers fail TLS verification from this specific network (a University
+  of Sydney FortiGate SSL-inspection proxy re-signing `oast.*` traffic,
+  confirmed by inspecting the actual served certificate's issuer -- not a
+  code bug or a real interactsh outage, see `docs/progress.md`'s 2026-08-19
+  entry). Next session should run this against a PortSwigger Web Security
+  Academy blind SSRF/XXE lab from a network without that interception to
+  confirm the interactsh round-trip works against a real target, not just
+  the synthetic crypto proof in `tests/test_oob_interaction.py`. See
+  `docs/roadmap.md` for the full phase plan.

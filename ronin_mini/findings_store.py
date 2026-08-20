@@ -55,6 +55,14 @@ class FindingsStore:
                 "findings": [],
                 # stage name ("recon"/"exploit"/"verify") -> that stage's summed Usage dict.
                 "stage_usage": {},
+                # correlation_id -> {secret_key, private_key_pem, server, created_at} for
+                # Phase 4's OOB (interactsh) sessions -- see categories/oob_interaction.py.
+                # Embedded here, not a separate collection, same "one document per mission"
+                # discipline as everything else in this store. Persisted (not kept in the
+                # MCP server subprocess's memory) specifically so verify_agent's later
+                # replay_probe call -- a completely separate subprocess spawned long after
+                # exploit_agent's -- can still poll the same session.
+                "oob_sessions": {},
             }
         )
         return mission_id
@@ -83,6 +91,24 @@ class FindingsStore:
         if doc is None:
             raise MissionNotFound(f"no mission with id {mission_id!r}")
         return doc.get("budget_usd")
+
+    def save_oob_session(self, mission_id: str, correlation_id: str, session: dict) -> None:
+        """Persist a Phase 4 OOB (interactsh) session's keys, keyed by its
+        correlation_id, so it can be polled again later -- including by
+        verify_agent's replay_probe, which runs in a separate subprocess
+        spawned long after the one that created the session.
+        """
+        result = self.missions.update_one(
+            {"_id": mission_id}, {"$set": {f"oob_sessions.{correlation_id}": session}}
+        )
+        if result.matched_count == 0:
+            raise MissionNotFound(f"no mission with id {mission_id!r}")
+
+    def get_oob_session(self, mission_id: str, correlation_id: str) -> dict | None:
+        doc = self.missions.find_one({"_id": mission_id}, {f"oob_sessions.{correlation_id}": 1})
+        if doc is None:
+            raise MissionNotFound(f"no mission with id {mission_id!r}")
+        return doc.get("oob_sessions", {}).get(correlation_id)
 
     def close(self) -> None:
         self.client.close()

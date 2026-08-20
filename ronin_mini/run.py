@@ -175,6 +175,7 @@ async def main_async(args: argparse.Namespace) -> int:
             store=store,
             mission_id=mission_id,
             model=args.model,
+            mongo_uri=args.mongo_uri,
             provider=args.provider,
             hitl_mode=args.hitl_mode,
             per_finding_max_iterations=args.exploit_per_finding_max_iterations,

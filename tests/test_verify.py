@@ -124,6 +124,20 @@ def test_replay_unknown_tool_returns_error():
     assert "error" in result
 
 
+def test_replay_poll_oob_interactions_threads_oob_store_and_input():
+    """Phase 4: poll_oob_interactions is replayable (declared "partial" --
+    a real interactsh poll, but session TTL is a live-environment caveat).
+    generate_oob_url itself is declared "false" (see manifest.yaml) since
+    re-registering a fresh session on replay proves nothing.
+    """
+    tool_input = {"mission_id": "m1", "correlation_id": "corr123"}
+    fake_oob_store = object()
+    with patch("categories.verify.run_poll_oob_interactions", return_value={"any_interaction": True}) as mock_run:
+        result = verify._replay_call(_scope(), _executor(), TIMEOUTS, "poll_oob_interactions", tool_input, fake_oob_store)
+    assert result == {"any_interaction": True}
+    mock_run.assert_called_once_with(fake_oob_store, "m1", "corr123")
+
+
 # --- _coerce_dict / _coerce_int: non-Anthropic tool-call type mismatches ---
 #
 # Surfaced by a real live run against Qwen3.6 Plus (via OpenRouter): unlike

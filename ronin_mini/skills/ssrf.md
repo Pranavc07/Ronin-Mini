@@ -40,13 +40,15 @@ that a URL parameter exists.
    (point at an external URL you control that 302s to the internal target,
    if the fetcher follows redirects) — note this only if the app's own
    validation clearly happens before redirect-following.
-5. **Be explicit about the limitation.** True out-of-band SSRF (the request
-   goes somewhere with no observable response difference at all) can't be
-   confirmed with this toolset — no Collaborator-style callback
-   infrastructure is available yet. State this plainly in the verdict
-   rather than guessing at a `dead-end` vs `incomplete` call; if in-band/
-   timing signals genuinely show nothing, say the blind case is
-   unconfirmable with current tooling.
+5. **True blind SSRF (no observable response difference at all): use
+   out-of-band confirmation.** Call `generate_oob_url`, point the vulnerable
+   parameter at the returned URL instead of an internal target, then call
+   `poll_oob_interactions` with the same correlation_id. A real DNS/HTTP
+   callback is direct, independent proof the server made the outbound
+   request — the strongest possible SSRF confirmation, since it doesn't
+   depend on any response content leaking back at all. If polling shows
+   nothing, wait briefly and poll once more before concluding `dead-end` —
+   some fetches (queued jobs, async webhooks) take a moment to fire.
 
 ## Response signatures
 
@@ -74,3 +76,5 @@ that a URL parameter exists.
 - `probe_variant` works for the simple in-band case (baseline = original
   external URL, variant = internal target) when you just need a body diff,
   no timing logic.
+- `generate_oob_url` + `poll_oob_interactions` for the true-blind case —
+  see step 5.
