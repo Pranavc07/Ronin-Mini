@@ -4,6 +4,21 @@ Minimal AI pentesting harness. Published: github.com/Pranavc07/Ronin-Mini.
 Read this + `docs/progress.md` + `docs/roadmap.md` at session start instead of
 re-exploring.
 
+## Package layout (as of 2026-08-19)
+
+The core lives under `ronin_mini/` — a real, pip-installable package
+(`pyproject.toml`, tagged releases starting at `v0.5.0`), not the flat
+script-run layout this file's older sections may still reference by bare
+filename (e.g. "agent_core.py" really means `ronin_mini/agent_core.py`
+now). Root-level `run.py`/`main.py` are thin 3-line shims delegating into
+`ronin_mini.run`/`ronin_mini.main` — the documented `python run.py` /
+`python main.py` workflow is unchanged for a direct clone. This exists so a
+second, private repo, [`ronin-pro`](https://github.com/Pranavc07/ronin-pro)
+(agentic-AI security testing + SOC 2 compliance-mapping — see that repo's
+`docs/roadmap.md`), can depend on this repo as a real pinned-commit pip
+package instead of forking it. Nothing from `ronin-pro` lands here; this
+repo stays the single source of truth for the core harness.
+
 ## License: BSL 1.1, not MIT (changed 2026-08-18)
 
 Switched from MIT to the [Business Source License 1.1](LICENSE) — source

@@ -5,6 +5,58 @@ each work session with: what changed, what's in progress, next concrete step.
 
 ---
 
+## 2026-08-19 — Packaged the core as a real pip library; stood up ronin-pro (Track B split)
+- User decision: split into two repos. `ronin-mini` (this repo) stays the
+  public BSL core; a new, proprietary `ronin-pro` repo holds the
+  agentic-AI-security + SOC 2 compliance-mapping direction ("Track B"),
+  depending on `ronin-mini` as a real pip package rather than a fork --
+  chosen specifically so core bugfixes never need manual porting between
+  repos.
+- Planned in `/plan` mode first; the initial draft (flat `py-modules` +
+  `package_data` for `agents/`/`skills/`/`ronin-tools-mcp/` as bare
+  sibling dirs) was reviewed and rejected before implementation -- two real
+  risks: `package_data` doesn't reliably pull in directories that aren't
+  nested inside a declared package (silent missing-files risk), and
+  top-level `py-modules` named `run`/`main`/`loop` are a real global-import
+  collision risk once installed alongside other packages. Revised to a
+  proper namespaced `ronin_mini/` package before writing any code.
+- Moved `agent_core.py`, `models/`, `recon_agent/`, `exploit_agent/`,
+  `verify_agent/`, `findings_store.py`, `loop.py`, `agents/`, `skills/`,
+  and `ronin-tools-mcp/` into `ronin_mini/`; fixed every import site --
+  relative imports inside the package, updated bare imports across all
+  ~18 affected test files. Root `run.py`/`main.py` are now 3-line shims
+  delegating into `ronin_mini.run`/`ronin_mini.main`, so the documented
+  `python run.py`/`python main.py` workflow keeps working unchanged for a
+  direct clone.
+- Verified rigorously, not just "pip install . worked": built a real wheel
+  (`python -m build`), installed it into a clean venv in an unrelated temp
+  directory, and ran a smoke script from there with zero proximity to the
+  source tree -- confirmed `from ronin_mini import agent_core` works and
+  the MCP server spawns from its packaged `site-packages` location,
+  completing a real `initialize()`/`list_tools()` handshake returning all
+  16 tools. Full test suite: 214 passed, same 2 pre-existing unrelated
+  failures (stale tool-list assertion, Docker not running in-session).
+- Tagged `v0.5.0`, committed (`3a19ce6`), pushed. `ronin-pro` created
+  private (`gh repo create Pranavc07/ronin-pro --private`), scaffolded
+  (`pyproject.toml` pinning `ronin-mini` at the actual commit SHA
+  `3a19ce6a661196b5a12363a26775326293df803d`, not just the mutable tag;
+  proprietary `LICENSE`; empty `src/ronin_pro/`), and its dependency on
+  this repo proven with a committed regression test there
+  (`tests/test_ronin_mini_dependency.py`) -- a real MCP-server spawn from
+  `ronin-pro`'s own venv, resolving `ronin-mini`'s `server.py` from its
+  installed location.
+- `docs/roadmap.md` updated with a pointer to `ronin-pro`'s own
+  `docs/roadmap.md` for the Track B phase plan (B0-B6) -- nothing from
+  Track B lands in this repo.
+- NEXT: known, deliberately deferred gap -- `CLAUDE.md` and `README.md`
+  still describe file paths without the new `ronin_mini/` prefix (e.g.
+  "agent_core.py" instead of "ronin_mini/agent_core.py"). Cosmetically
+  stale, nothing functionally wrong; worth a doc sweep next session. The
+  two still-open Track A items from the original Track B plan's Phase B0
+  (the case-study doc for the redirect-scope/prompt-injection fixes, and
+  the pending Metasploitable live-pipeline check) remain open, tracked in
+  this file's earlier entries.
+
 ## 2026-08-19 — Live-tested Phase 3 against DVWA; fixed a Unicode crash and a real pricing bug
 - Follow-up to Phase 3's build (below): live-tested it against real DVWA
   with two OpenRouter models (Qwen3.6 Plus, GLM 5.2), at the user's request

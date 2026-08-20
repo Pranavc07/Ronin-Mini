@@ -2,6 +2,8 @@
 
 Non-negotiable across every phase: per-agent tool allowlisting (client-side, enforced at MCP connection) and scope.py-style target validation on every tool call. These stay even as tools, agents, and infra multiply — this is the one design property that's genuinely stronger than Pentest Copilot's single-generalist-agent model, and it's cheap to preserve now, expensive to retrofit later.
 
+**This is the public, BSL-licensed core (Track A) — this file only covers what's in this repo.** As of 2026-08-19, `ronin-mini` is packaged as a real pip-installable library (`ronin_mini/`, tagged `v0.5.0`) specifically so it can be depended on, not forked. A second, proprietary repo — [`ronin-pro`](https://github.com/Pranavc07/ronin-pro), private — depends on this repo's tagged commits and holds the agentic-AI security testing + SOC 2 compliance-mapping direction ("Track B"). See `ronin-pro`'s own `docs/roadmap.md` for that plan; nothing from Track B lands in this repo. Bugfixes and core improvements always land here first and flow into `ronin-pro` by bumping its pinned dependency commit.
+
 ---
 
 ## Test Environments Reference
