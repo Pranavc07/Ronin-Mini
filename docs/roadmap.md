@@ -195,10 +195,14 @@ tools have grown provider-specific assumptions):
 - PortSwigger Academy labs are purpose-built for this and give a clear solved/not-solved signal, unlike Juice Shop/DVWA which don't have much blind-vuln surface.
 - NEXT: live-test against a real target (a PortSwigger blind SSRF/XXE lab) to confirm the interactsh round-trip works end-to-end against a real target, not just the synthetic crypto proof in `tests/test_oob_interaction.py`.
 
-## Phase 5 — Concurrency + Redis
-- Only once you actually need real concurrent agent execution (the worker-pool model from earlier — multiple exploit_agent instances pulling from a shared task queue) rather than sequential phases.
-- Redis as the task queue / broker at this point — file or Mongo-based claim-locking gets awkward under real concurrency.
-- Triggered by an actual bottleneck (missions taking too long sequentially), not added speculatively.
+## Phase 5 — Concurrency (Mongo-atomic first cut; Redis deferred)
+**Status: shipped a scoped-down first cut — concurrent findings within one mission, via MongoDB atomic claiming, no Redis (2026-08-21)**
+
+- Built without a recorded sequential-time bottleneck (this phase's own gating language says "triggered by an actual bottleneck... not added speculatively" — worth being honest that this one shipped ahead of that trigger, at the user's explicit direction). Given that, deliberately scoped down from the original Redis-broker plan below: fixed the real concurrent-write race in `findings_store.py`'s old whole-list `save_findings` (last-writer-wins under concurrent callers) with MongoDB's own per-document atomicity (`claim_next_finding`/`complete_finding`, a real compare-and-swap claim) instead of adding new broker infrastructure. See `CLAUDE.md`'s "Concurrent finding processing" section for the full design.
+- `exploit_agent`/`verify_agent` each gained a `worker_count` param (`run.py --exploit-worker-count`/`--verify-worker-count`, both default `1` = unchanged sequential behavior) — multiple workers claim different findings from the *same* mission concurrently, each with its own MCP session/subprocess.
+- **Original plan, not built, still the trigger for a real Phase 5b**: Redis as the task queue / broker — only once Mongo-atomic claiming genuinely bottlenecks under real concurrent load (contention, not just "would be nice"), not by default. Cross-mission concurrency (parallel whole pipelines) is also still unaddressed — a different problem from this phase's within-mission concurrency.
+- Known caveat: `--budget-usd` is checked between stages only, so higher worker counts can overshoot the cap further before it's caught — not fixed in this pass.
+- NEXT: live-test with `--exploit-worker-count > 1` against a real target (e.g. re-run a DVWA mission's remaining findings concurrently) to confirm no duplicated/dropped attempts on real Mongo, not just mongomock unit tests.
 
 ## Phase 6 — Visibility Layer
 - `ronin status <mission_id>` — CLI table view of mission/findings state, before committing to a frontend.

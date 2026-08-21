@@ -22,6 +22,38 @@ from .verify_agent.loop import run_verify_agent
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
+# Empirically measured (2026-08-21, stress test against a 100-finding mission on
+# a single Windows dev host): worker_count scaled cleanly through 10/20/40/80
+# concurrent workers (each spawns its own MCP server subprocess), then broke
+# hard at 150 with WinError 1450/8 -- the OS ran out of process/handle table
+# space, not a MongoDB or model-provider limit. This default sits well under
+# that measured ceiling; --allow-high-worker-count lifts it for hosts known to
+# have more headroom (more RAM, a higher OS file-descriptor/process limit).
+DEFAULT_MAX_WORKER_COUNT = 25
+
+
+def check_worker_count_cap(exploit_worker_count: int, verify_worker_count: int, allow_high: bool) -> str | None:
+    """Returns an error message if either worker count exceeds the default cap
+    and --allow-high-worker-count wasn't passed, else None. A pure function so
+    the cap logic is testable without spinning up the async pipeline."""
+    if allow_high:
+        return None
+    over_cap = [
+        (name, count)
+        for name, count in (("--exploit-worker-count", exploit_worker_count), ("--verify-worker-count", verify_worker_count))
+        if count > DEFAULT_MAX_WORKER_COUNT
+    ]
+    if not over_cap:
+        return None
+    flags = ", ".join(f"{name}={count}" for name, count in over_cap)
+    return (
+        f"error: {flags} exceeds the default cap of {DEFAULT_MAX_WORKER_COUNT}. "
+        f"Each worker spawns its own MCP server subprocess -- on the host this cap was "
+        f"measured on, concurrency scaled cleanly up to 80 workers but broke at 150 from "
+        f"OS process/handle exhaustion (WinError 1450/8), not a code or MongoDB limit. "
+        f"Pass --allow-high-worker-count if you've confirmed this host can handle more."
+    )
+
 
 def _fmt_usage(usage: dict) -> str:
     return (
@@ -61,8 +93,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recon-max-minutes", type=float, default=20.0)
     parser.add_argument("--exploit-per-finding-max-iterations", type=int, default=10)
     parser.add_argument("--exploit-per-finding-max-minutes", type=float, default=5.0)
+    parser.add_argument(
+        "--exploit-worker-count",
+        type=int,
+        default=1,
+        help="Concurrent exploit_agent workers claiming findings from the same mission "
+        "(default 1 = today's sequential behavior). Each worker opens its own MCP session. "
+        "Note: --budget-usd is only checked between stages, not mid-stage, so a higher "
+        "worker count can overshoot the cap further before it's caught.",
+    )
     parser.add_argument("--verify-per-finding-max-iterations", type=int, default=6)
     parser.add_argument("--verify-per-finding-max-minutes", type=float, default=5.0)
+    parser.add_argument(
+        "--verify-worker-count",
+        type=int,
+        default=1,
+        help="Concurrent verify_agent workers claiming findings from the same mission "
+        "(default 1 = today's sequential behavior). Same budget-check caveat as "
+        "--exploit-worker-count.",
+    )
+    parser.add_argument(
+        "--allow-high-worker-count",
+        action="store_true",
+        help=f"Lift the default cap of {DEFAULT_MAX_WORKER_COUNT} on --exploit-worker-count/"
+        "--verify-worker-count. Only pass this if you've confirmed the host has the "
+        "process/memory headroom -- see check_worker_count_cap()'s docstring in run.py "
+        "for how that default was measured.",
+    )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
         "--provider",
@@ -96,6 +153,11 @@ async def main_async(args: argparse.Namespace) -> int:
     scope_dir = os.path.realpath(args.scope_dir)
     if not os.path.isdir(scope_dir):
         print(f"error: --scope-dir does not exist or is not a directory: {args.scope_dir}", file=sys.stderr)
+        return 1
+
+    cap_error = check_worker_count_cap(args.exploit_worker_count, args.verify_worker_count, args.allow_high_worker_count)
+    if cap_error:
+        print(cap_error, file=sys.stderr)
         return 1
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -181,6 +243,7 @@ async def main_async(args: argparse.Namespace) -> int:
             per_finding_max_iterations=args.exploit_per_finding_max_iterations,
             per_finding_max_minutes=args.exploit_per_finding_max_minutes,
             log_path=log_path,
+            worker_count=args.exploit_worker_count,
         )
         print(f"[exploit] processed {exploit_result['processed']}/{exploit_result['total_findings']} findings")
         exploit_cost = estimate_cost_usd(args.model, exploit_result["usage"])
@@ -206,6 +269,7 @@ async def main_async(args: argparse.Namespace) -> int:
             per_finding_max_iterations=args.verify_per_finding_max_iterations,
             per_finding_max_minutes=args.verify_per_finding_max_minutes,
             log_path=log_path,
+            worker_count=args.verify_worker_count,
         )
         print(f"[verify] verified {verify_result['processed']} exploited finding(s)")
         verify_cost = estimate_cost_usd(args.model, verify_result["usage"])

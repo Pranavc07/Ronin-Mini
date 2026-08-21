@@ -747,16 +747,87 @@ updated to use this instead of their old "unconfirmable with current
 tooling, no Collaborator-style infra" language — real methodology now, not
 a stated limitation.
 
+## Concurrent finding processing (Phase 5, opt-in)
+
+`exploit_agent`/`verify_agent` used to process a mission's findings strictly
+one at a time, sequentially, in a single MCP session for the whole stage.
+That's still the default (`worker_count=1` on both `run_exploit_agent`/
+`run_verify_agent`, and the corresponding `--exploit-worker-count`/
+`--verify-worker-count` CLI flags on `run.py`, both default `1`) — the
+concurrent path is opt-in, not a change to any existing run's behavior.
+
+**Deliberately skipped Redis for this pass**, despite `docs/roadmap.md`'s
+Phase 5 originally naming it as the broker. No sequential-time bottleneck
+had actually been observed yet when this was built, so the roadmap's own
+gating language ("triggered by an actual bottleneck... not added
+speculatively") argued against adding new infrastructure (a Redis
+dependency, a new docker-compose service, a new failure mode) speculatively
+too. Used MongoDB's existing per-document atomicity instead: `update_one`
+is atomic server-side, so `findings_store.py`'s new `claim_next_finding`
+(status-guarded `$elemMatch` update, retried against a snapshot of
+candidate ids until one succeeds or none remain) is a real compare-and-swap
+claim with no lost updates under concurrent callers — no queue needed for
+this scale. This fixed a real bug the old code had regardless of
+concurrency: `save_findings`'s whole-list `$set` overwrite meant two
+concurrent writers would silently clobber each other's claims/attempts,
+last-writer-wins. `complete_finding` (atomic `$push` onto the finding's
+attempts array + `$set` its status, matched by finding id) is the
+completion half. Redis becomes a real Phase 5b only if concurrent-findings
+mode genuinely bottlenecks on Mongo contention in practice — not before.
+
+**Concurrency unit is findings within one mission**, not missions
+themselves: `exploit_agent`'s `_worker`/`verify_agent`'s `_worker`
+(`exploit_agent/loop.py`, `verify_agent/loop.py`) each own a fresh MCP
+session/subprocess (sharing one `ClientSession` across concurrent
+`_process_one_finding` calls was never established as safe, so each worker
+gets its own rather than risk multiplexing conversations onto one stdio
+transport) and loop `claim_next_finding` → `_process_one_finding` (unchanged)
+→ `complete_finding` until no claimable finding remains. `run_*_agent`
+fans out `worker_count` of these via `asyncio.gather` and merges their
+processed counts/usage. Cross-mission concurrency (running whole
+recon→exploit→verify pipelines in parallel) is a different problem, not
+addressed here.
+
+**Known caveat, not fixed in this pass**: `run.py --budget-usd` is only
+checked *between* stages, not mid-stage. With `worker_count > 1`, multiple
+findings can burn cost in parallel before the next between-stage check
+fires, so the cap can overshoot further than it would sequentially.
+Mid-stage budget interruption would be a separate, unrequested feature.
+
+**Soft worker-count cap, found by actually breaking it**: a live stress test
+(2026-08-21, a 100-finding mission against DVWA, escalating `worker_count`)
+scaled cleanly through 10/20/40/80 concurrent workers -- getting *faster*
+each step, not slower, since each worker's own MCP server subprocess and
+model-provider calls are independent -- then broke hard at 150. The failure
+wasn't MongoDB or a model-provider rate limit; it was the host OS running out
+of process/handle table space from spawning that many concurrent subprocesses
+(`WinError 1450`/`WinError 8` on the Windows host this was measured on),
+which then cascaded into unrelated-looking secondary errors
+(`ImportError`/`MemoryError`/a stray `MongoClient after close`) as the
+process itself started failing to open files. `run.py`'s
+`DEFAULT_MAX_WORKER_COUNT = 25` sits well under the measured 80-clean/
+150-breaks line; `check_worker_count_cap()` rejects `--exploit-worker-count`/
+`--verify-worker-count` above that default and tells the operator to pass
+`--allow-high-worker-count` if they've confirmed their host has more
+headroom (more RAM, a higher OS process/fd limit) -- a soft cap with an
+explicit override, not a hard ceiling, since the real constraint is
+host-specific and this number is deliberately conservative rather than
+tuned to any one machine.
+
 ## Deliberate non-goals (do not add without being asked)
 
-No Kafka, no service framework, no message queue, no dynamic agent graph, no
-FOURTH agent, no scoring/severity ranking. MongoDB (Phase 3, see above) is
-the one deliberate exception to "no database" — planned on the roadmap from
-the start, not a drift toward a service architecture; state is still one
-document per mission, no collection sprawl, no ORM. Orchestration is
-`run.py` running three loops in sequence. `loop.py` is async only because
-the MCP client requires it, not as a step toward concurrency. Keeping the
-whole thing readable top-to-bottom is a hard constraint.
+No Kafka, no service framework, no dynamic agent graph, no FOURTH agent, no
+scoring/severity ranking. MongoDB (Phase 3, see above) is the one
+deliberate exception to "no database" — planned on the roadmap from the
+start, not a drift toward a service architecture; state is still one
+document per mission, no collection sprawl, no ORM. Concurrent finding
+processing (Phase 5, see below) is the one deliberate exception to "no
+message queue" — it's opt-in, defaults to today's exact sequential
+behavior, and deliberately doesn't add a broker (Redis or otherwise); see
+that section for why. Orchestration is still `run.py` running recon then
+exploit then verify in sequence — only *within* the exploit/verify stages
+can multiple findings now process concurrently. Keeping the whole thing
+readable top-to-bottom is a hard constraint.
 
 ## Test targets (all local, authorized)
 

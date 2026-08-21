@@ -78,6 +78,51 @@ class FindingsStore:
         if result.matched_count == 0:
             raise MissionNotFound(f"no mission with id {mission_id!r}")
 
+    def claim_next_finding(self, mission_id: str, from_status: str, to_status: str) -> dict | None:
+        """Atomically claim one finding with status == from_status, setting it to
+        to_status. Unlike save_findings' whole-array $set (last-writer-wins under
+        concurrent callers), this is race-safe: MongoDB's update_one is atomic
+        per-document, so a status-guarded $elemMatch update either wins the claim
+        (modified_count == 1) or loses it to a concurrent caller (modified_count
+        == 0) with no lost updates either way.
+
+        Snapshots candidate ids once, then tries each in order until one claim
+        succeeds or none remain. No retry-with-fresh-snapshot loop -- the
+        findings list is fixed by the time exploit/verify starts (recon has
+        already finished), so no new candidates can appear mid-stage.
+        """
+        doc = self.missions.find_one({"_id": mission_id}, {"findings.id": 1, "findings.status": 1})
+        if doc is None:
+            raise MissionNotFound(f"no mission with id {mission_id!r}")
+
+        candidate_ids = [f["id"] for f in doc.get("findings", []) if f.get("status") == from_status]
+        for finding_id in candidate_ids:
+            result = self.missions.update_one(
+                {"_id": mission_id, "findings": {"$elemMatch": {"id": finding_id, "status": from_status}}},
+                {"$set": {"findings.$.status": to_status}},
+            )
+            if result.modified_count == 1:
+                # Positional ($) projection isn't supported by mongomock (used in
+                # tests), so fetch the whole document and filter in Python instead
+                # of {"findings.$": 1} -- works identically against real MongoDB.
+                claimed_doc = self.missions.find_one({"_id": mission_id}, {"findings": 1})
+                return next(f for f in claimed_doc["findings"] if f["id"] == finding_id)
+        return None
+
+    def complete_finding(
+        self, mission_id: str, finding_id: str, attempts_field: str, attempt: dict, new_status: str
+    ) -> None:
+        """Atomically append attempt onto findings.$.{attempts_field} and set
+        findings.$.status -- the completion half of the claim_next_finding
+        compare-and-swap pattern, matched by finding_id (not by from_status,
+        since the caller already knows it holds this finding's claim)."""
+        result = self.missions.update_one(
+            {"_id": mission_id, "findings": {"$elemMatch": {"id": finding_id}}},
+            {"$push": {f"findings.$.{attempts_field}": attempt}, "$set": {"findings.$.status": new_status}},
+        )
+        if result.matched_count == 0:
+            raise MissionNotFound(f"no mission with id {mission_id!r} (or no finding with id {finding_id!r})")
+
     def record_stage_usage(self, mission_id: str, stage: str, usage: dict) -> None:
         result = self.missions.update_one({"_id": mission_id}, {"$set": {f"stage_usage.{stage}": usage}})
         if result.matched_count == 0:

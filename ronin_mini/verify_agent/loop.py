@@ -17,11 +17,12 @@ verify_incomplete (parallel to exploit_agent's "incomplete") means neither
 verdict was reached before the budget ran out.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from mcp import ClientSession
+from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from .. import agent_core
@@ -134,35 +135,25 @@ async def _process_one_finding(
     return attempt, status
 
 
-async def run_verify_agent(
+async def _worker(
+    worker_id: int,
+    server_params: StdioServerParameters,
+    model_adapter: models.ModelAdapter,
     target: str,
-    scope_dir: str,
-    store: FindingsStore,
     mission_id: str,
-    model: str,
-    mongo_uri: str = "mongodb://localhost:27017",
-    provider: str = "anthropic",
-    hitl_mode: str = "auto",
-    per_finding_max_iterations: int = 6,
-    per_finding_max_minutes: float = 5.0,
-    max_tokens: int = 4096,
-    allowed_hosts: list[str] | None = None,
-    log_path: str | None = None,
-) -> dict:
-    if allowed_hosts is None:
-        allowed_hosts = [urlparse(target).hostname or target]
-
-    findings = store.load_findings(mission_id)
-
-    model_adapter = models.build_adapter(provider, model)
-    # The server needs mongo_uri/mission_id so replay_probe can look up winning
-    # attempts directly from the mission document (it runs in a separate
-    # subprocess, so it opens its own Mongo connection rather than sharing
-    # `store`).
-    server_params = agent_core.mcp_server_params(
-        scope_dir, allowed_hosts, mongo_uri=mongo_uri, mission_id=mission_id
-    )
-
+    store: FindingsStore,
+    per_finding_max_iterations: int,
+    per_finding_max_minutes: float,
+    max_tokens: int,
+    hitl_mode: str,
+    log_path: str | None,
+) -> tuple[int, list[dict]]:
+    """One worker: owns its own MCP session/subprocess, loops claiming+
+    verifying findings until claim_next_finding returns None (no more
+    "exploited" findings left for anyone to claim). Returns (processed_count,
+    [attempt usage dicts]) for the caller to merge across workers. Mirrors
+    exploit_agent's _worker exactly -- see its docstring for why each worker
+    gets its own session rather than sharing one."""
     processed = 0
     attempt_usages: list[dict] = []
     async with stdio_client(server_params) as (read, write):
@@ -175,12 +166,10 @@ async def run_verify_agent(
             )
             tool_defs = agent_core.mcp_tools_to_anthropic_schema(allowed_tools)
 
-            for finding in findings:
-                if finding.get("status") != "exploited":
-                    continue
-
-                finding["status"] = "verifying"
-                store.save_findings(mission_id, findings)
+            while True:
+                finding = store.claim_next_finding(mission_id, "exploited", "verifying")
+                if finding is None:
+                    break
 
                 attempt, outcome_status = await _process_one_finding(
                     model_adapter,
@@ -195,18 +184,69 @@ async def run_verify_agent(
                     hitl_mode=hitl_mode,
                     log_path=log_path,
                 )
-                finding.setdefault("verify_attempts", []).append(attempt)
-                finding["status"] = outcome_status
-                store.save_findings(mission_id, findings)
+                store.complete_finding(mission_id, finding["id"], "verify_attempts", attempt, outcome_status)
                 processed += 1
                 attempt_usages.append(attempt["usage"])
 
-    total_usage = sum_usage(*attempt_usages)
+    return processed, attempt_usages
+
+
+async def run_verify_agent(
+    target: str,
+    scope_dir: str,
+    store: FindingsStore,
+    mission_id: str,
+    model: str,
+    mongo_uri: str = "mongodb://localhost:27017",
+    provider: str = "anthropic",
+    hitl_mode: str = "auto",
+    per_finding_max_iterations: int = 6,
+    per_finding_max_minutes: float = 5.0,
+    max_tokens: int = 4096,
+    allowed_hosts: list[str] | None = None,
+    log_path: str | None = None,
+    worker_count: int = 1,
+) -> dict:
+    if allowed_hosts is None:
+        allowed_hosts = [urlparse(target).hostname or target]
+
+    total_findings = len(store.load_findings(mission_id))
+
+    model_adapter = models.build_adapter(provider, model)
+    # The server needs mongo_uri/mission_id so replay_probe can look up winning
+    # attempts directly from the mission document (it runs in a separate
+    # subprocess, so it opens its own Mongo connection rather than sharing
+    # `store`).
+    server_params = agent_core.mcp_server_params(
+        scope_dir, allowed_hosts, mongo_uri=mongo_uri, mission_id=mission_id
+    )
+
+    results = await asyncio.gather(
+        *[
+            _worker(
+                i,
+                server_params,
+                model_adapter,
+                target,
+                mission_id,
+                store,
+                per_finding_max_iterations,
+                per_finding_max_minutes,
+                max_tokens,
+                hitl_mode,
+                log_path,
+            )
+            for i in range(worker_count)
+        ]
+    )
+
+    processed = sum(count for count, _ in results)
+    total_usage = sum_usage(*(usage for _, usages in results for usage in usages))
     store.record_stage_usage(mission_id, "verify", total_usage)
 
     return {
         "processed": processed,
-        "total_findings": len(findings),
+        "total_findings": total_findings,
         "mission_id": mission_id,
         "usage": total_usage,
     }

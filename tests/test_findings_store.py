@@ -129,3 +129,97 @@ def test_multiple_oob_sessions_coexist_on_one_mission(store):
 
     assert store.get_oob_session(mission_id, "corr1")["server"] == "oast.fun"
     assert store.get_oob_session(mission_id, "corr2")["server"] == "oast.pro"
+
+
+# --- claim_next_finding / complete_finding (Phase 5 concurrent claiming) --
+
+
+def test_claim_next_finding_returns_different_findings_then_none(store):
+    mission_id = store.create_mission("t", "o")
+    store.save_findings(
+        mission_id,
+        [
+            {"id": "f1", "status": "new", "exploit_attempts": []},
+            {"id": "f2", "status": "new", "exploit_attempts": []},
+        ],
+    )
+
+    first = store.claim_next_finding(mission_id, "new", "claimed")
+    second = store.claim_next_finding(mission_id, "new", "claimed")
+    third = store.claim_next_finding(mission_id, "new", "claimed")
+
+    assert first["id"] != second["id"]
+    assert {first["id"], second["id"]} == {"f1", "f2"}
+    assert third is None
+
+
+def test_claim_next_finding_sets_status_in_store(store):
+    mission_id = store.create_mission("t", "o")
+    store.save_findings(mission_id, [{"id": "f1", "status": "new", "exploit_attempts": []}])
+
+    store.claim_next_finding(mission_id, "new", "claimed")
+
+    findings = store.load_findings(mission_id)
+    assert findings[0]["status"] == "claimed"
+
+
+def test_claim_next_finding_skips_already_claimed(store):
+    mission_id = store.create_mission("t", "o")
+    store.save_findings(
+        mission_id,
+        [
+            {"id": "f1", "status": "claimed", "exploit_attempts": []},
+            {"id": "f2", "status": "new", "exploit_attempts": []},
+        ],
+    )
+
+    claimed = store.claim_next_finding(mission_id, "new", "claimed")
+
+    assert claimed["id"] == "f2"
+
+
+def test_claim_next_finding_unknown_mission_raises(store):
+    with pytest.raises(MissionNotFound):
+        store.claim_next_finding("does-not-exist", "new", "claimed")
+
+
+def test_complete_finding_appends_attempt_and_sets_status(store):
+    mission_id = store.create_mission("t", "o")
+    store.save_findings(mission_id, [{"id": "f1", "status": "claimed", "exploit_attempts": []}])
+
+    store.complete_finding(mission_id, "f1", "exploit_attempts", {"verdict": {"status": "exploited"}}, "exploited")
+
+    findings = store.load_findings(mission_id)
+    assert findings[0]["status"] == "exploited"
+    assert findings[0]["exploit_attempts"] == [{"verdict": {"status": "exploited"}}]
+
+
+def test_complete_finding_only_touches_the_named_finding(store):
+    mission_id = store.create_mission("t", "o")
+    store.save_findings(
+        mission_id,
+        [
+            {"id": "f1", "status": "claimed", "exploit_attempts": []},
+            {"id": "f2", "status": "new", "exploit_attempts": []},
+        ],
+    )
+
+    store.complete_finding(mission_id, "f1", "exploit_attempts", {"a": 1}, "exploited")
+
+    findings = store.load_findings(mission_id)
+    by_id = {f["id"]: f for f in findings}
+    assert by_id["f2"]["status"] == "new"
+    assert by_id["f2"]["exploit_attempts"] == []
+
+
+def test_complete_finding_unknown_mission_raises(store):
+    with pytest.raises(MissionNotFound):
+        store.complete_finding("does-not-exist", "f1", "exploit_attempts", {}, "exploited")
+
+
+def test_complete_finding_unknown_finding_id_raises(store):
+    mission_id = store.create_mission("t", "o")
+    store.save_findings(mission_id, [{"id": "f1", "status": "claimed", "exploit_attempts": []}])
+
+    with pytest.raises(MissionNotFound):
+        store.complete_finding(mission_id, "does-not-exist", "exploit_attempts", {}, "exploited")
