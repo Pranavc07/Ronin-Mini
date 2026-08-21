@@ -331,7 +331,10 @@ directly (`mongosh`, Compass, whatever you already use).
 | `--budget-usd` | no | none | Optional mission-level cost cap (approximate); the run stops before starting a stage that would exceed it |
 | `--recon-max-iterations` / `--recon-max-minutes` | no | `40` / `20.0` | Recon's own budget |
 | `--exploit-per-finding-max-iterations` / `--exploit-per-finding-max-minutes` | no | `10` / `5.0` | Budget *per finding* for exploit_agent (each finding gets a fresh conversation) |
+| `--exploit-worker-count` | no | `1` | Concurrent exploit_agent workers claiming findings from the same mission (see "Concurrent finding processing" below) |
 | `--verify-per-finding-max-iterations` / `--verify-per-finding-max-minutes` | no | `6` / `5.0` | Budget *per finding* for verify_agent |
+| `--verify-worker-count` | no | `1` | Concurrent verify_agent workers, same mechanism as `--exploit-worker-count` |
+| `--allow-high-worker-count` | no | off | Lift the default cap of `25` on the two worker-count flags above |
 | `--model` | no | `claude-sonnet-4-6` | Model ID |
 | `--provider` | no | `anthropic` | Model provider adapter |
 | `--hitl-mode` | no | `auto` | `auto` \| `manual` \| `plan` |
@@ -343,6 +346,35 @@ recon off mid-sweep well before it's covered everything. Widen
 `--recon-max-iterations`/`--recon-max-minutes` and give an objective that
 explicitly asks for full-surface coverage if you want recon to enumerate
 everything before going deep on the first interesting thing it finds.
+
+### Concurrent finding processing
+
+By default, exploit_agent and verify_agent each process one finding at a
+time, sequentially. Pass `--exploit-worker-count N` / `--verify-worker-count
+N` to run `N` workers concurrently against the same mission instead — each
+worker opens its own MCP session and atomically claims the next unclaimed
+finding (MongoDB's per-document `update_one` is the compare-and-swap; no
+Redis, no separate task queue).
+
+```bash
+python run.py \
+  --target 192.168.56.5 \
+  --objective "Find authentication, IDOR, injection, and network-service vulnerabilities" \
+  --scope-dir . \
+  --exploit-worker-count 4 --verify-worker-count 2
+```
+
+There's a default cap of `25` on both flags. It's a *measured* number, not a
+guess: a live stress test scaled cleanly through 10/20/40/80 concurrent
+workers (getting faster each step), then broke hard at 150 — not from
+MongoDB or a model-provider rate limit, but from the host OS running out of
+process/handle table space to spawn that many concurrent subprocesses.
+`--allow-high-worker-count` lifts the cap if you've confirmed your machine
+has more headroom than that.
+
+One caveat: `--budget-usd` is only checked *between* stages, not mid-stage,
+so a higher worker count can burn past the cap further before it's caught
+than it would running sequentially.
 
 ### The flow
 
@@ -576,12 +608,17 @@ Notable files:
 
 ## What this is *not*
 
-By design, this harness does not include: a web UI, a message queue, a
-dynamic agent graph, or a fourth agent. State lives in one Mongo document
-per mission (Phase 3 — see `findings_store.py`), a deliberate exception to
-"no database" made specifically because the tool output it stores (nmap
-XML-derived data, sqlmap/hydra/metasploit results, HTTP probe diffs) is
-genuinely heterogeneous, not because this is heading toward a service
-architecture. Orchestration is still `run.py` running three loops in
-sequence, nothing more. See [`docs/roadmap.md`](docs/roadmap.md) for what's
-deliberately staying out of scope even as this grows.
+By design, this harness does not include: a web UI, a dynamic agent graph,
+or a fourth agent. State lives in one Mongo document per mission (Phase 3 —
+see `findings_store.py`), a deliberate exception to "no database" made
+specifically because the tool output it stores (nmap XML-derived data,
+sqlmap/hydra/metasploit results, HTTP probe diffs) is genuinely
+heterogeneous, not because this is heading toward a service architecture.
+Concurrent finding processing (Phase 5 — see above) is a similar deliberate
+exception to "no message queue": it's opt-in (`worker_count` defaults to
+`1`, today's exact sequential behavior) and uses MongoDB's own per-document
+atomicity for claiming work rather than adding a broker like Redis.
+Orchestration is still `run.py` running recon → exploit → verify in
+sequence — only *within* the exploit/verify stages can multiple findings
+now process concurrently. See [`docs/roadmap.md`](docs/roadmap.md) for
+what's deliberately staying out of scope even as this grows.
