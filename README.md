@@ -651,6 +651,13 @@ Notable files:
   RSA-OAEP/AES-CTR decryption is tested for real (a genuine keypair,
   genuine encryption against it, genuine decryption back) — not just that
   mocks were called.
+- `test_exploit_agent_concurrency.py` — unit, `mongomock` + a stubbed
+  `_process_one_finding`; asserts `worker_count > 1` processes every
+  finding exactly once (no duplicates, none dropped) under real concurrent
+  asyncio workers racing against the same mission.
+- `test_worker_count_cap.py` — unit, no dependencies; the default cap on
+  `--exploit-worker-count`/`--verify-worker-count` and the
+  `--allow-high-worker-count` override.
 
 ## What this is *not*
 
