@@ -115,7 +115,8 @@ your use case is anywhere near the line.
   `auto` never prompts, `manual` prompts `[y/n/edit]` on every gated tool
   call, `plan` prompts once per finding/run and reuses that decision. Gated
   by default: `probe_variant`, `execute_python`, `replay_probe`, every
-  `network_exploit` tool, and `metasploit`.
+  `network_exploit` tool, `metasploit`, and both `oob_interaction` tools
+  (`generate_oob_url`/`poll_oob_interactions`).
 - **Mission storage (MongoDB)** — three-agent mode hands findings off through
   a Mongo document per mission (`findings_store.FindingsStore`, one document
   in the `ronin.missions` collection; `--mongo-uri` to point elsewhere,
