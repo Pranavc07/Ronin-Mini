@@ -10,14 +10,11 @@ A minimal, standalone AI pentesting harness. It is model agnostic, so any
 model reasons step-by-step over a target through a small, scoped set of
 tools, and every tool call is logged to an auditable transcript.
 
-This is deliberately a **thin harness**, not a framework: sequential agent
-loops instead of a scheduler, no message queue, no dynamic agent graph, no
-web UI. Three-agent mode does use MongoDB for mission/finding state (one
-document per mission, no ORM, no service layer around it — see "Mission
-storage" in [Architecture at a glance](#architecture-at-a-glance) below) —
-the one deliberate exception, made because the tool output it stores is
-genuinely heterogeneous, not a step toward a bigger service architecture.
-See [`docs/roadmap.md`](docs/roadmap.md) for what's shipped and what's
+Three-agent mode uses MongoDB for mission/finding state (one document per
+mission, no ORM, no service layer around it — see "Mission storage" in
+[Architecture at a glance](#architecture-at-a-glance) below), made because
+the tool output it stores is genuinely heterogeneous. See
+[`docs/roadmap.md`](docs/roadmap.md) for what's shipped and what's
 deliberately deferred, and [`docs/progress.md`](docs/progress.md) for a
 running log of what changed and why.
 
