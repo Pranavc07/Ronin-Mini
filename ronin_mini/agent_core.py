@@ -207,6 +207,20 @@ def load_skill(finding_type: str) -> SkillDoc | None:
     return SkillDoc(metadata=metadata, body=body)
 
 
+# MCP's stdio_client only inherits a fixed safe-list into the spawned server
+# subprocess by default (HOME/PATH/etc, not the full parent environment --
+# see mcp.client.stdio.get_default_environment) -- anything else has to be
+# forwarded explicitly via StdioServerParameters.env. These two are the DooD
+# workspace-path-translation vars (see docker-compose.yml's `ronin` service
+# and categories/exploit_runtime.py's _host_path_for_scratch_dir): unset in
+# the normal direct-host-run case, so this is a no-op there. Found live --
+# execute_python kept failing with "can't open file '/workspace/exploit.py'"
+# inside the Docker-packaged orchestrator even after exploit_runtime.py's
+# fix, because the MCP server subprocess (which actually runs execute_python)
+# never saw these vars in the first place.
+_FORWARDED_ENV_VARS = ("RONIN_CONTAINER_WORKSPACE_DIR", "RONIN_HOST_WORKSPACE_DIR")
+
+
 def mcp_server_params(
     scope_dir: str,
     allowed_hosts: list[str],
@@ -221,7 +235,8 @@ def mcp_server_params(
     # server without these and they're simply unused.
     if mongo_uri is not None and mission_id is not None:
         args += ["--mongo-uri", mongo_uri, "--mission-id", mission_id]
-    return StdioServerParameters(command=sys.executable, args=args)
+    env = {k: v for k in _FORWARDED_ENV_VARS if (v := os.environ.get(k)) is not None}
+    return StdioServerParameters(command=sys.executable, args=args, env=env or None)
 
 
 _MANIFEST_CACHE: dict[str, ToolMeta] | None = None

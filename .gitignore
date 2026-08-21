@@ -10,3 +10,4 @@ logs/
 dist/
 build/
 *.egg-info/
+.ronin-scratch/

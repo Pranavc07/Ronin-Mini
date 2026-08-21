@@ -1,0 +1,11 @@
+.git
+.env
+logs/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+findings*.json
+transcript_*.json

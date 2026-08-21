@@ -154,6 +154,50 @@ your use case is anywhere near the line.
 Full, from-scratch setup for anyone cloning this repo. Windows/PowerShell
 notes are called out where a step differs from the Linux/macOS command.
 
+### Fast path: Docker
+
+Skip the manual Python/ripgrep/Docker-Desktop walkthrough below entirely —
+the harness itself is packaged as an image:
+
+```bash
+git clone https://github.com/Pranavc07/Ronin-Mini.git
+cd Ronin-Mini
+cp .env.example .env   # fill in ANTHROPIC_API_KEY or OPENROUTER_API_KEY
+docker-compose up -d mongo
+docker-compose run --rm ronin /app/run.py \
+  --target http://host.docker.internal:4280 \
+  --objective "Find authentication, IDOR, injection, and network-service vulnerabilities" \
+  --scope-dir . \
+  --mongo-uri mongodb://mongo:27017
+```
+
+Only Docker itself is required on the host — no Python venv, no manual
+ripgrep install. Two things differ from running `run.py` directly on a
+host, both because this container has its own network namespace:
+
+- A locally published target (DVWA/Juice Shop on `localhost`) needs
+  `host.docker.internal` in `--target` instead of `localhost` — same
+  convention already used for the Kali attack box's own tools.
+- Mongo is reachable at the `mongo` service name, not `localhost` — pass
+  `--mongo-uri mongodb://mongo:27017` explicitly.
+
+`--scope-dir .` maps to the project directory on your host (the whole repo
+is bind-mounted into the container) — point it at a different local
+directory by editing `docker-compose.yml`'s `ronin` service `volumes:` if
+you want `code_search`/`file_read` scoped somewhere else. `docker-compose
+run --rm ronin /app/main.py ...` runs single-agent mode instead.
+
+This container manages *sibling* containers on the host (for
+`execute_python`'s sandbox and the Kali attack box) via the host's mounted
+Docker socket — real, standard for "a container that manages containers"
+(same pattern most CI runners use), but worth knowing it gives the `ronin`
+container effectively root-equivalent access to your Docker daemon. See
+`CLAUDE.md`'s "Docker-packaged orchestrator" section for the full design.
+
+Skip to [Get API keys and configure `.env`](#5-get-api-keys-and-configure-env)
+below if you haven't created `.env` yet — everything else in this section
+is for running the harness directly on your host instead.
+
 ### 1. Clone and install Python dependencies
 
 ```bash
@@ -219,8 +263,12 @@ Ronin talks to models through a provider-agnostic adapter
 (`models/build_adapter`) — pick **Anthropic direct**, **OpenRouter**
 (fronting many providers through one account), or both.
 
-Create a `.env` file in the repo root (the harness reads this automatically
-via your shell, or `export` the same variables directly):
+Create a `.env` file in the repo root. The harness itself doesn't auto-load
+`.env` (no `python-dotenv` dependency) — running via Docker Compose picks it
+up automatically (`env_file: .env` on the `ronin` service), but running
+`main.py`/`run.py` directly needs the variables actually exported into your
+shell first, e.g. `set -a && source .env && set +a` (bash) before invoking
+Python, or just `export` them directly:
 
 ```bash
 # Anthropic direct -- used when you run with --provider anthropic (the default)

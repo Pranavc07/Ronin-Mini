@@ -829,6 +829,85 @@ exploit then verify in sequence — only *within* the exploit/verify stages
 can multiple findings now process concurrently. Keeping the whole thing
 readable top-to-bottom is a hard constraint.
 
+## Docker-packaged orchestrator (2026-08-21)
+
+`Dockerfile` (repo root) packages the harness itself as an image, and
+`docker-compose.yml`'s new `ronin` service wires it up alongside `mongo` --
+setup collapses to `docker-compose up -d mongo` + `docker-compose run --rm
+ronin /app/run.py ...` instead of a manual Python venv + ripgrep +
+Docker-Desktop walkthrough. `main.py`/`run.py` are still the only entry
+points (`ENTRYPOINT ["python"]`, `CMD ["/app/run.py", "--help"]` -- pass
+`/app/main.py ...` for single-agent mode instead), so nothing about the
+CLI itself changed, only how it's launched.
+
+**Docker-outside-of-Docker (DooD), by design and by necessity**:
+`execute_python`/`network_exploit`'s Kali box spawn *sibling* containers on
+the host via the `docker` CLI (`executor.py`) -- this only works from inside
+a container if that container has the host's Docker socket mounted in
+(`docker-compose.yml`'s `/var/run/docker.sock:/var/run/docker.sock`) and its
+own `docker` CLI binary (the `Dockerfile` copies it from the official
+`docker:27-cli` image via multi-stage build, rather than installing a whole
+daemon). This gives the `ronin` container effectively root-equivalent access
+to the host's Docker daemon -- the Dockerfile's top comment calls this out
+explicitly rather than letting it pass silently, same discipline as every
+other real tradeoff in this repo (the `execute_python` sandbox's soft
+network-scope guarantee, `metasploit`'s free-text module field, etc.).
+
+**Two real bugs found live-testing this, both about paths crossing the
+container boundary, not fixed by inspection beforehand**:
+
+1. `execute_python` kept failing with `python: can't open file
+   '/workspace/exploit.py'` even though the code was genuinely written to
+   the scratch directory. Root cause: `categories/exploit_runtime.py`'s
+   `tempfile.mkdtemp()` creates a directory inside *this process's own*
+   filesystem view -- but `executor.run_docker_python`'s `-v
+   {scratch_dir}:/workspace:rw` bind-mount source is resolved by the HOST
+   Docker daemon (reached over the mounted socket), which has no visibility
+   into a path that only exists inside the `ronin` container's overlay
+   filesystem. The ephemeral sandbox container mounted an effectively empty
+   directory. Fixed with `_scratch_base_dir()`/`_host_path_for_scratch_dir()`
+   in `exploit_runtime.py`: when `RONIN_CONTAINER_WORKSPACE_DIR` is set
+   (only true in the DooD setup -- unset in the normal direct-host-run case,
+   where this is a complete no-op), scratch dirs are created inside the
+   already-bind-mounted `/workspace` instead of the system temp dir, and
+   their path is translated to the real host-absolute equivalent (via
+   `RONIN_HOST_WORKSPACE_DIR`, set from `${PWD}` in `docker-compose.yml`)
+   before being handed to `docker run`.
+2. Even after that fix, the exact same error persisted. Root cause #2:
+   `agent_core.mcp_server_params` builds `StdioServerParameters` without an
+   explicit `env=`, and the `mcp` SDK's `stdio_client` does NOT inherit the
+   full parent process environment into the spawned MCP server subprocess by
+   default -- only a fixed safe-list (`HOME`/`PATH`/`SHELL`/etc, see
+   `mcp.client.stdio.get_default_environment`). The two DooD env vars were
+   set on the `ronin` container's own environment, but the MCP server
+   subprocess that actually executes `execute_python` calls never saw them,
+   so fix #1's env-var checks silently fell through to the no-op branch.
+   Fixed by explicitly forwarding `RONIN_CONTAINER_WORKSPACE_DIR`/
+   `RONIN_HOST_WORKSPACE_DIR` via `StdioServerParameters.env` in
+   `mcp_server_params` (merges on top of the SDK's safe-list, doesn't
+   replace it). Worth remembering for any *future* env var an agent's tools
+   need to see: this forwarding is opt-in per variable, not automatic.
+
+**Loopback targets** (DVWA/Juice Shop published to a host port) need
+`host.docker.internal` in place of `localhost` in `--target` when running
+via this container -- same convention already used for the Kali box's own
+tools (see "Loopback host translation" above), for the same reason: the
+`ronin` container has its own network namespace, not the host's.
+`docker-compose.yml` sets `extra_hosts: host.docker.internal:host-gateway`
+so this resolves on Linux Docker Engine too, not just Docker Desktop (which
+provides it natively).
+
+**Mongo** is reachable at the `mongo` compose service name, not `localhost`,
+from inside the `ronin` container -- pass `--mongo-uri mongodb://mongo:27017`
+explicitly (no code default changed; documented in the README instead).
+
+Live-tested end-to-end (2026-08-21): a real recon → exploit → verify run
+against DVWA from inside the `ronin` container, over OpenRouter, with
+`execute_python` genuinely reaching the target and returning real captured
+output -- confirms the whole DooD chain (socket mount → sibling `docker`
+calls → scratch-dir path translation → MCP subprocess env forwarding) works,
+not just that the image builds.
+
 ## Test targets (all local, authorized)
 
 - **OWASP Juice Shop** — `http://localhost:3000` (Docker, Node/JS, JWT auth).

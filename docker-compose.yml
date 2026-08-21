@@ -6,6 +6,25 @@
 # Data persists in the `ronin-mongo-data` named volume across restarts.
 # Point run.py at a different instance with --mongo-uri instead, if you
 # already run MongoDB elsewhere.
+#
+# `ronin` packages the harness itself (see Dockerfile) so setup is just
+# `docker-compose up -d mongo` + `docker-compose run --rm ronin ...` instead
+# of a manual Python/ripgrep/Docker-Desktop walkthrough. Not started by
+# `docker-compose up` alone (no `ports`/long-running process to keep up) --
+# invoke it directly, e.g.:
+#
+#   docker-compose run --rm ronin /app/run.py \
+#     --target http://host.docker.internal:4280 \
+#     --objective "..." --scope-dir . --mongo-uri mongodb://mongo:27017
+#
+# Two things differ from running run.py directly on a host, both because
+# this container has its own network namespace, not the host's:
+#   - A locally published target (DVWA/Juice Shop on localhost) needs
+#     `host.docker.internal` in place of `localhost` -- same convention this
+#     repo already uses for the Kali attack box's tools, see CLAUDE.md's
+#     "Loopback host translation" section.
+#   - Mongo is reachable at the `mongo` service name, not `localhost` --
+#     pass --mongo-uri mongodb://mongo:27017 explicitly.
 services:
   mongo:
     image: mongo:7
@@ -15,6 +34,39 @@ services:
     volumes:
       - ronin-mongo-data:/data/db
     restart: unless-stopped
+
+  ronin:
+    build: .
+    container_name: ronin-mini
+    depends_on:
+      - mongo
+    env_file:
+      - .env
+    environment:
+      # execute_python's ephemeral sandbox containers are bind-mounted by
+      # the HOST Docker daemon, which can't see paths inside this container
+      # -- these two let categories/exploit_runtime.py translate its own
+      # scratch-dir paths to the real host path backing the .:/workspace
+      # mount below. See that file's _host_path_for_scratch_dir docstring.
+      - RONIN_CONTAINER_WORKSPACE_DIR=/workspace
+      - RONIN_HOST_WORKSPACE_DIR=${PWD}
+    volumes:
+      # The whole project directory, mounted where the Dockerfile's WORKDIR
+      # points -- covers --scope-dir . and --log-path's relative default
+      # (logs/run_<...>.jsonl) landing back on the host, unchanged from
+      # running run.py directly.
+      - .:/workspace
+      # Host's Docker socket -- required so execute_python/network_exploit's
+      # `docker build`/`docker exec` calls (executor.py) can manage sibling
+      # containers on the host from inside this one. See the Dockerfile's
+      # top comment for the security tradeoff this implies.
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      # Docker Desktop (Mac/Windows) provides this automatically; Linux
+      # Docker Engine needs it spelled out explicitly.
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
 
 volumes:
   ronin-mongo-data:
